@@ -3,7 +3,7 @@ import { useRelayStatus, useSettings } from '../hooks/basics'
 import { IconAlert, IconClose } from './icons'
 
 /** Délai sans aucun relais joignable avant d'expliquer le blocage (le premier contact prend 1–3 s). */
-export const BLOCKED_AFTER_MS = 12_000
+export const BLOCKED_AFTER_MS = 15_000
 
 /**
  * Diagnostic « réseau bloqué » : un mur vide sans explication ressemble à un mur sans vidéos.
@@ -26,14 +26,32 @@ export function NetworkBanner({ onHelp }: { onHelp: () => void }) {
     }
   }, [])
 
+  // Retour de l'onglet au premier plan : les connexions reprennent, ce n'est pas un blocage. Le délai
+  // ne compte que le temps passé au premier plan (constat réel : fausse alerte au réveil de l'onglet).
+  const [visibleSince, setVisibleSince] = useState(() => Date.now())
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible')
   useEffect(() => {
-    if (connected > 0 || !online) {
+    const update = () => {
+      const v = document.visibilityState === 'visible'
+      setVisible(v)
+      if (v) setVisibleSince(Date.now())
+    }
+    document.addEventListener('visibilitychange', update)
+    window.addEventListener('pageshow', update)
+    return () => {
+      document.removeEventListener('visibilitychange', update)
+      window.removeEventListener('pageshow', update)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (connected > 0 || !online || !visible) {
       setBlocked(false)
       return
     }
     const id = setTimeout(() => setBlocked(true), BLOCKED_AFTER_MS)
     return () => clearTimeout(id)
-  }, [connected, online])
+  }, [connected, online, visible, visibleSince])
 
   if (dismissed || (online && !blocked)) return null
   return (

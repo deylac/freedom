@@ -23,6 +23,19 @@
   }
 }
 
+/*
+ * iOS zoome automatiquement sur tout champ dont le texte fait moins de 16 px, et la page reste ensuite
+ * zoomée, coupée sur les bords (constat réel du 1ᵉʳ nov.). Hors calque : prime sur les utilitaires
+ * text-xs / text-sm des composants, uniquement sur écran tactile.
+ */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 @layer base {
   :root {
     color-scheme: dark;

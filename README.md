@@ -87,7 +87,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 ## Critères d'acceptation (§8)
 
 `npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et sept
-serveurs Blossom de test (dont : sans `/mirror`, refusant les clés inconnues, répondant 35 s après réception). Dernier résultat : **30/30** (limite de capture raccourcie ;
+serveurs Blossom de test (dont : sans `/mirror`, refusant les clés inconnues, répondant 35 s après réception). Dernier résultat : **31/31** (limite de capture raccourcie ;
 la vraie limite de 60 s a été vérifiée avec `E2E_FULL=1 npm run e2e` lors d'un lot précédent).
 
 | Test du PRD | Vérification automatisée |

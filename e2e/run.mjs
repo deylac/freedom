@@ -621,6 +621,35 @@ await step('Par défaut, la caméra s’ouvre avec les visages floutés (libell�
 })
 
 // ---------------------------------------------------------------------------
+// Constat réel (iPhone, 1ᵉʳ nov.) : après la saisie dans « changer de mur », la page restait zoomée et
+// coupée sur les bords. iOS zoome sur tout champ dont le texte fait moins de 16 px.
+
+await step('Mobile : aucun champ de saisie sous 16 px (pas de zoom automatique d’iOS)', async () => {
+  const page = await newPage({ mobile: true })
+  const small = []
+  const check = async (where) => {
+    for (const s of await page.$$eval('input:not([type=checkbox]):not([type=radio]):not([type=file]), textarea, select', (els) =>
+      els.filter((e) => e.offsetParent !== null).map((e) => ({ size: parseFloat(getComputedStyle(e).fontSize), label: e.getAttribute('aria-label') ?? e.getAttribute('placeholder') ?? e.tagName })),
+    ))
+      if (s.size < 16) small.push(`${where} : ${s.label} (${s.size} px)`)
+  }
+  await page.goto(`${APP}`)
+  await page.getByRole('search').first().waitFor()
+  await check('accueil')
+  await page.goto(`${APP}#zoom`)
+  await page.getByRole('button', { name: 'Changer de mur' }).click()
+  await check('mur')
+  await page.getByRole('button', { name: 'Réglages' }).click()
+  await page.getByRole('dialog').waitFor()
+  await check('réglages')
+  assert.deepEqual(small, [], `champs trop petits : ${small.join(' ; ')}`)
+  // Et aucune page plus large que l'écran.
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  assert.ok(overflow <= 0, `page plus large que l'écran de ${overflow} px`)
+  await page.context().close()
+})
+
+// ---------------------------------------------------------------------------
 // Test 1 (suite) — changement de hashtag sans requête HTTP
 
 await step('Routage : passage à #15octobre sans requête au serveur web', async () => {

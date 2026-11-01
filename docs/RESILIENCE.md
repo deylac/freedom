@@ -154,7 +154,7 @@ clé Nostr du projet (et ses dépositaires) pour signer la liste des miroirs.
   Une liste signée par une autre clé est ignorée (testé).
 - Écran **Réglages → « Adresses de secours »** : adresses avec lien vers le mur courant, QR code local,
   copie, partage ; conseils (Wi-Fi/données, VPN, Tor Browser, autres relais).
-- **Bandeau « Aucun relais ne répond »** après 12 s sans relais (ou « Hors ligne ») avec accès direct
+- **Bandeau « Aucun relais ne répond »** après 15 s sans relais (au premier plan) (ou « Hors ligne ») avec accès direct
   à ces conseils : un mur vide ne passe plus pour un mur sans vidéos.
 - Publier la liste : `HASHWALL_PROJECT_NSEC=nsec1… node scripts/publish-mirrors.mjs "https://…|Libellé" …`
   sur un ordinateur de confiance (republier la liste **complète** à chaque fois).

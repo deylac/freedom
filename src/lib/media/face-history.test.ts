@@ -49,7 +49,9 @@ describe('FaceHistory (audit F01)', () => {
     detection(h, 1, 0, 50)
     const other = { x: 300, y: 300, w: 40, h: 40 }
     detection(h, 2, 200, 260, [other])
-    expect(h.faces(300)).toEqual([face, other])
+    const boxes = h.faces(300)
+    expect(boxes).toHaveLength(2)
+    expect(boxes[1].w).toBeGreaterThan(other.w)
   })
 
   it('changement de caméra : résultats antérieurs ignorés, confiance perdue jusqu’à une analyse complète', () => {
@@ -64,6 +66,18 @@ describe('FaceHistory (audit F01)', () => {
     expect(h.trusted(260)).toBe(false)
     detection(h, 4, 300, 350)
     expect(h.trusted(360)).toBe(true)
+  })
+
+  it('un rectangle ancien est agrandi (le visage a pu bouger depuis la capture)', () => {
+    const h = new FaceHistory()
+    detection(h, 1, 0, 0)
+    const [fresh] = h.faces(0)
+    const [old] = h.faces(500)
+    expect(fresh).toEqual(face)
+    expect(old.w).toBeGreaterThan(face.w * 2)
+    expect(old.x).toBeLessThan(face.x)
+    // L'ancien rectangle contient toujours le nouveau centre d'un visage déplacé d'une demi-largeur.
+    expect(old.x + old.w).toBeGreaterThan(face.x + face.w * 1.5)
   })
 
   it('ignore un résultat pour une image inconnue', () => {

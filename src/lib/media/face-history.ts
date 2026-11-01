@@ -17,6 +17,14 @@ import type { Box } from './faces'
 /** Âge maximal (depuis la capture) d'un résultat pour faire confiance au détecteur et garder ses masques. */
 export const FACE_TRUST_MS = 1500
 
+/** Agrandissement de chaque côté, en fraction de la taille du visage, par seconde d'âge du résultat. */
+export const FACE_GROWTH_PER_S = 1.2
+
+function grow(b: Box, k: number): Box {
+  if (k <= 0) return b
+  return { ...b, x: b.x - b.w * k, y: b.y - b.h * k, w: b.w * (1 + 2 * k), h: b.h * (1 + 2 * k) }
+}
+
 export class FaceHistory {
   private sentAt = new Map<number, number>()
   private results: { at: number; boxes: Box[] }[] = []
@@ -44,9 +52,15 @@ export class FaceHistory {
     return now - this.lastCompleteAt < FACE_TRUST_MS
   }
 
-  /** Rectangles encore valables (même fenêtre que la confiance). */
+  /**
+   * Rectangles encore valables (même fenêtre que la confiance), AGRANDIS selon leur âge : entre deux
+   * détections (2 à 3 par seconde sur téléphone), le visage bouge. Constat réel (selfie au miroir,
+   * téléphone tenu à la main) : un rectangle à l'heure ne couvrait plus qu'une partie du visage.
+   */
   faces(now: number): Box[] {
-    return this.results.filter((r) => now - r.at < FACE_TRUST_MS).flatMap((r) => r.boxes)
+    return this.results
+      .filter((r) => now - r.at < FACE_TRUST_MS)
+      .flatMap((r) => r.boxes.map((b) => grow(b, Math.min(1, ((now - r.at) / 1000) * FACE_GROWTH_PER_S))))
   }
 
   get count(): number {
