@@ -2,7 +2,7 @@
 // Usage : npm run e2e           (limite de capture réduite à 5 s pour aller vite)
 //         E2E_FULL=1 npm run e2e (vraie limite de 60 s)
 import assert from 'node:assert/strict'
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { extname, join } from 'node:path'
@@ -19,7 +19,7 @@ const LIMIT_MS = FULL ? 60_000 : 5_000
 // ---------------------------------------------------------------------------
 // Infrastructure simulée
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' }
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.wasm': 'application/wasm', '.tflite': 'application/octet-stream' }
 const documentRequests = []
 const web = createServer((req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname)
@@ -53,6 +53,8 @@ const browser = await chromium.launch({
 })
 const results = []
 async function step(name, fn) {
+  // E2E_ONLY=<texte> : ne lance que les scénarios indépendants dont le nom contient ce texte.
+  if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return
   const t0 = Date.now()
   try {
     const info = await fn()
@@ -381,6 +383,118 @@ await step('Deux voies : un nouveau clip n’attend pas la réplication du préc
   assert.ok(imeta(v2).fallback.some((u) => u.includes(':3005/')), 'miroir lent absent des fallback')
   await page.context().close()
   return `Y publiée ${((relay.received.indexOf(v2) - relay.received.indexOf(y)) > 0 ? 'avant' : 'après')} la fin de la réplication de X`
+})
+
+// ---------------------------------------------------------------------------
+// Floutage des visages (MediaPipe, worker) avec une fausse caméra contenant de vrais visages
+
+/**
+ * Compose une scène 1280×720 (fond très texturé + 3 visages) et l'écrit en Y4M pour Chromium.
+ * Paysage 1280×720 = exactement nos contraintes getUserMedia : Chromium livre l'image telle quelle
+ * (une scène portrait serait recadrée en 720×720). L'enregistreur en garde la bande centrale.
+ */
+async function makeFaceVideo(path) {
+  const page = await browser.newPage()
+  const face = readFileSync(new URL('./fixtures/face.jpg', import.meta.url)).toString('base64')
+  const planes = await page.evaluate(async ([b64, SCENE_FACES]) => {
+    const img = new Image()
+    img.src = `data:image/jpeg;base64,${b64}`
+    await img.decode()
+    const W = 1280, H = 720
+    const c = new OffscreenCanvas(W, H)
+    const ctx = c.getContext('2d')
+    const bg = ctx.createImageData(W, H)
+    let seed = 7
+    for (let i = 0; i < bg.data.length; i += 4) {
+      seed = (seed * 16807) % 2147483647
+      const v = 50 + (seed % 150)
+      bg.data[i] = v; bg.data[i + 1] = v * 0.9; bg.data[i + 2] = v * 0.8; bg.data[i + 3] = 255
+    }
+    ctx.putImageData(bg, 0, 0)
+    for (const [x, y, s] of SCENE_FACES) ctx.drawImage(img, x, y, s, s)
+    const d = ctx.getImageData(0, 0, W, H).data
+    const Y = new Uint8Array(W * H), U = new Uint8Array((W / 2) * (H / 2)), V = new Uint8Array((W / 2) * (H / 2))
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+      const k = (j * W + i) * 4
+      Y[j * W + i] = 0.299 * d[k] + 0.587 * d[k + 1] + 0.114 * d[k + 2]
+      if (i % 2 === 0 && j % 2 === 0) {
+        const q = (j / 2) * (W / 2) + i / 2
+        U[q] = 128 - 0.168736 * d[k] - 0.331264 * d[k + 1] + 0.5 * d[k + 2]
+        V[q] = 128 + 0.5 * d[k] - 0.418688 * d[k + 1] - 0.081312 * d[k + 2]
+      }
+    }
+    const b64of = (a) => { let s = ''; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode(...a.subarray(i, i + 0x8000)); return btoa(s) }
+    return [b64of(Y), b64of(U), b64of(V)]
+  }, [face, SCENE_FACES])
+  await page.close()
+  const frame = Buffer.concat([Buffer.from('FRAME\n'), ...planes.map((p) => Buffer.from(p, 'base64'))])
+  mkdirSync(new URL('./artifacts/', import.meta.url), { recursive: true })
+  writeFileSync(path, Buffer.concat([Buffer.from('YUV4MPEG2 W1280 H720 F30:1 Ip A1:1 C420jpeg\n'), frame, frame]))
+}
+
+// Visages dans la bande centrale de la scène (x de 437,5 à 842,5 : ce que garde le recadrage 9:16).
+const SCENE_FACES = [[500, 20, 180], [620, 260, 110], [520, 470, 70]]
+// Scène → canvas 720×1280 : échelle 1280/720, décalage horizontal de 437,5 px (recadrage centré).
+const K = 1280 / 720
+const toCanvas = (x, y, w, h) => ({ x: Math.round((x - 437.5) * K), y: Math.round(y * K), w: Math.round(w * K), h: Math.round(h * K) })
+// Visage = 30,6 % du recadrage, décalé de 15,9 % / 20,6 % (cf. e2e/fixtures/face.jpg)
+const FACES = SCENE_FACES.map(([x, y, s]) => toCanvas(x + s * 0.159, y + s * 0.206, s * 0.306, s * 0.306))
+const BACKGROUND = toCanvas(700, 560, 90, 90)
+
+/**
+ * « Platitude » d'une zone du canvas : part des pixels voisins strictement identiques.
+ * ≈ 1 dans une zone pixelisée (blocs uniformes), ≈ 0 dans une image naturelle ou bruitée.
+ */
+const flatness = (page, r) =>
+  page.evaluate((r) => {
+    const c = document.querySelector('canvas[aria-label="Aperçu de la caméra"]')
+    const d = c.getContext('2d').getImageData(r.x, r.y, r.w, r.h).data
+    let same = 0, n = 0
+    for (let j = 0; j < r.h; j++) for (let i = 0; i < r.w - 1; i++) {
+      const k = (j * r.w + i) * 4
+      if (d[k] === d[k + 4] && d[k + 1] === d[k + 5] && d[k + 2] === d[k + 6]) same++
+      n++
+    }
+    return same / n
+  }, r)
+
+await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, échec fermé, aucune requête externe', async () => {
+  const video = fileURLToPath(new URL('./artifacts/faces.y4m', import.meta.url))
+  await makeFaceVideo(video)
+  const faceBrowser = await chromium.launch({
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${video}`, '--no-proxy-server'],
+  })
+  const context = await faceBrowser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera', 'microphone'] })
+  await context.addInitScript((s) => localStorage.setItem('hw:settings', JSON.stringify(s)), { ...settings, termsAcceptedVersion: 1 })
+  const external = []
+  context.on('request', (r) => { if (!/^(http:\/\/127\.0\.0\.1|data:|blob:)/.test(r.url())) external.push(r.url()) })
+  const page = await context.newPage()
+  page.on('pageerror', (e) => console.log('    [page error]', e.message))
+  // Chargement du modèle ralenti de 4 s : l'état « non fiable » doit pixeliser toute l'image.
+  await page.route('**/models/*.tflite', async (route) => { await new Promise((r) => setTimeout(r, 4000)); await route.continue() })
+  await page.goto(`${APP}#visages`)
+  await page.getByRole('button', { name: /Filmer pour #visages/ }).click()
+  await page.waitForFunction(() => !document.querySelector('[data-testid=record]')?.hasAttribute('disabled'), null, { timeout: 15_000 })
+  await page.waitForTimeout(800)
+  const base = { faces: await Promise.all(FACES.map((f) => flatness(page, f))), bg: await flatness(page, BACKGROUND) }
+  assert.ok(base.faces.every((f) => f < 0.5) && base.bg < 0.2, `scène déjà plate ? ${JSON.stringify(base)}`)
+
+  await page.getByRole('button', { name: /Filtre d'anonymisation/ }).click() // sans filtre → visages
+  await page.waitForTimeout(600)
+  const loadingState = await page.getByTestId('face-status').getAttribute('data-trusted')
+  const bgWhileLoading = await flatness(page, BACKGROUND)
+  assert.equal(loadingState, 'false')
+  assert.ok(bgWhileLoading > 0.8, `pendant le chargement, toute l'image doit être pixelisée (platitude du fond ${bgWhileLoading.toFixed(2)})`)
+
+  await page.locator('[data-testid=face-status][data-trusted=true]').waitFor({ timeout: 60_000 })
+  await page.waitForTimeout(500)
+  const count = Number(await page.getByTestId('face-status').getAttribute('data-count'))
+  const after = { faces: await Promise.all(FACES.map((f) => flatness(page, f))), bg: await flatness(page, BACKGROUND) }
+  after.faces.forEach((f, i) => assert.ok(f > 0.8, `visage ${i} (${FACES[i].w} px) non flouté : platitude ${f.toFixed(2)} (avant ${base.faces[i].toFixed(2)})`))
+  assert.ok(after.bg < 0.2, `le fond ne devrait plus être pixelisé (platitude ${after.bg.toFixed(2)})`)
+  assert.deepEqual(external, [], `requêtes externes : ${external.join(', ')}`)
+  await faceBrowser.close()
+  return `${count} visages détectés ; platitude des visages ${FACES.map((f, i) => `${f.w}px ${base.faces[i].toFixed(2)}→${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
 })
 
 // ---------------------------------------------------------------------------

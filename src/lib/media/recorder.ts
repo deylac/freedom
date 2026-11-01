@@ -11,6 +11,8 @@
  */
 import { CAPTURE_FPS, CAPTURE_HEIGHT, CAPTURE_WIDTH, MAX_CLIP_MS, QUALITY_PROFILES, type QualityProfile } from '../../config'
 import { baseMime, extFromMime } from '../blossom/urls'
+import { FaceTracker } from './face-tracker'
+import { blockFor, marginFor, padBox } from './faces'
 import { scrubVideoBlob, type ScrubReport } from './mp4-scrub'
 
 export type FilterMode = 'none' | 'faces' | 'pixelate'
@@ -30,18 +32,14 @@ export interface Recording {
   stoppedBy: 'user' | 'limit' | 'interrupted'
 }
 
-interface DetectedFace {
-  boundingBox: DOMRectReadOnly
+/** État du floutage des visages, pour l'interface. */
+export interface FaceStatus {
+  state: 'off' | 'loading' | 'ready' | 'error'
+  /** Le détecteur couvre toute l'image avec des résultats récents ; sinon l'image ENTIÈRE est pixelisée. */
+  trusted: boolean
+  count: number
+  error?: string
 }
-interface FaceDetectorLike {
-  detect(source: CanvasImageSource): Promise<DetectedFace[]>
-}
-type FaceDetectorCtor = new (opts?: { fastMode?: boolean; maxDetectedFaces?: number }) => FaceDetectorLike
-
-const FaceDetectorImpl = (globalThis as { FaceDetector?: FaceDetectorCtor }).FaceDetector
-
-/** API Shape Detection : disponible sur certains Chrome (Android, macOS), pas sur Safari/Firefox. */
-export const faceDetectionAvailable = (): boolean => typeof FaceDetectorImpl === 'function'
 
 export class CaptureError extends Error {
   constructor(
@@ -85,8 +83,6 @@ const AUDIO: MediaTrackConstraints = { echoCancellation: true, noiseSuppression:
 export class CaptureSession {
   facing: Facing = 'environment'
   filter: FilterMode = 'none'
-  /** Indique si le filtre visages a dû se replier sur la pixelisation intégrale. */
-  faceFallback = false
   maxMs = MAX_CLIP_MS
 
   private camera: MediaStream | null = null
@@ -99,10 +95,7 @@ export class CaptureSession {
   private stopReason: Recording['stoppedBy'] = 'user'
   private timers: ReturnType<typeof setTimeout>[] = []
   private posterPromise: Promise<Blob | null> | null = null
-  private faces: { box: DOMRectReadOnly; at: number }[] = []
-  private detector: FaceDetectorLike | null = null
-  private detecting = false
-  private lastDetect = 0
+  private tracker: FaceTracker | null = null
   private scratch = document.createElement('canvas')
   private closed = false
   done: Promise<Recording> | null = null
@@ -222,20 +215,21 @@ export class CaptureSession {
       const sx = (v.videoWidth - sw) / 2
       const sy = (v.videoHeight - sh) / 2
       this.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H)
-      if (this.filter === 'pixelate' || (this.filter === 'faces' && this.faceFallback)) {
+      if (this.filter === 'pixelate') {
         this.pixelate(0, 0, W, H, 28)
       } else if (this.filter === 'faces') {
-        this.detectFaces()
-        const now = performance.now()
-        // Persistance 700 ms : un visage manqué sur une image reste masqué.
-        this.faces = this.faces.filter((f) => now - f.at < 700)
-        for (const { box } of this.faces) {
-          const pad = 0.3
-          const x = (box.x - sx) * scale - box.width * scale * pad
-          const y = (box.y - sy) * scale - box.height * scale * pad
-          const w = box.width * scale * (1 + 2 * pad)
-          const h = box.height * scale * (1 + 2 * pad)
-          this.pixelate(Math.max(0, x), Math.max(0, y), Math.min(W, w), Math.min(H, h), 18)
+        // Détecteur chargé à la demande (≈ 15 Mo, une seule fois) ; l'image brute lui est envoyée
+        // AVANT toute pixelisation.
+        this.tracker ??= new FaceTracker()
+        this.tracker.feed(this.canvas, W, H)
+        if (!this.tracker.trusted) {
+          // Échec fermé : chargement, erreur ou résultats périmés → toute l'image.
+          this.pixelate(0, 0, W, H, 28)
+        } else {
+          for (const face of this.tracker.faces) {
+            const p = padBox(face, marginFor(face), W, H)
+            this.pixelate(p.x, p.y, p.w, p.h, blockFor(face))
+          }
         }
       }
     }
@@ -256,36 +250,10 @@ export class CaptureSession {
     this.ctx.imageSmoothingEnabled = true
   }
 
-  private detectFaces() {
-    const now = performance.now()
-    if (this.detecting || now - this.lastDetect < 180) return
-    if (!this.detector) {
-      if (!FaceDetectorImpl) {
-        this.faceFallback = true
-        return
-      }
-      try {
-        this.detector = new FaceDetectorImpl({ fastMode: true, maxDetectedFaces: 10 })
-      } catch {
-        this.faceFallback = true
-        return
-      }
-    }
-    this.detecting = true
-    this.lastDetect = now
-    this.detector
-      .detect(this.video)
-      .then((faces) => {
-        const at = performance.now()
-        this.faces.push(...faces.map((f) => ({ box: f.boundingBox, at })))
-      })
-      .catch(() => {
-        // En cas d'échec, on privilégie la sécurité : tout pixeliser.
-        this.faceFallback = true
-      })
-      .finally(() => {
-        this.detecting = false
-      })
+  faceStatus(): FaceStatus {
+    if (this.filter !== 'faces' || !this.tracker) return { state: 'off', trusted: false, count: 0 }
+    const t = this.tracker
+    return { state: t.state, trusted: t.trusted, count: t.count, error: t.error }
   }
 
   // ----- enregistrement -----------------------------------------------------
@@ -385,6 +353,8 @@ export class CaptureSession {
 
   close(): void {
     this.closed = true
+    this.tracker?.close()
+    this.tracker = null
     cancelAnimationFrame(this.raf)
     this.timers.forEach(clearTimeout)
     document.removeEventListener('visibilitychange', this.onVisibility)

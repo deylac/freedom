@@ -21,7 +21,7 @@ jobs:
         run: |
           mkdir -p public/models
           base=https://storage.googleapis.com/mediapipe-models/face_detector
-          for m in blaze_face_short_range blaze_face_full_range blaze_face_full_range_sparse; do
+          for m in blaze_face_full_range; do
             url="$base/$m/float16/1/$m.tflite"
             if curl -fsSL --retry 3 -o "public/models/$m.tflite" "$url"; then
               echo "OK  $url ($(stat -c %s public/models/$m.tflite) octets)"
@@ -31,6 +31,8 @@ jobs:
             fi
           done
           (cd public/models && sha256sum *.tflite > SHA256SUMS && cat SHA256SUMS)
+          # Empreinte figée dans src/lib/media/face-tracker.ts : toute différence doit être examinée.
+          grep -q 3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b public/models/SHA256SUMS || { echo "::error::Le modèle a changé"; exit 1; }
       - name: Committer
         run: |
           git config user.name "github-actions[bot]"

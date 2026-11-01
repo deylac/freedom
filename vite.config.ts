@@ -50,6 +50,51 @@ function listPublicFiles(dir: string, root = dir): string[] {
 }
 
 /**
+ * MediaPipe embarque une télémétrie (POST vers odml.pa.googleapis.com toutes les 60 s) : elle
+ * révélerait à Google l'adresse IP de quiconque active le floutage. On remplace l'URL par une
+ * adresse inerte. Si l'URL disparaît d'une future version, le build échoue : il faudra revérifier.
+ */
+const MEDIAPIPE_TELEMETRY_URL = 'https://odml.pa.googleapis.com/v1/log'
+function mediapipeNoTelemetry(): Plugin {
+  return {
+    name: 'hashwall-mediapipe-no-telemetry',
+    transform(code, id) {
+      if (!id.includes('@mediapipe/tasks-vision')) return null
+      if (!code.includes(MEDIAPIPE_TELEMETRY_URL)) {
+        this.error(`MediaPipe : télémétrie introuvable dans ${id} — auditer la nouvelle version avant de l'utiliser`)
+      }
+      return { code: code.replaceAll(MEDIAPIPE_TELEMETRY_URL, 'data:,telemetrie-desactivee'), map: null }
+    },
+  }
+}
+
+/** Fichiers WASM du détecteur de visages, servis depuis /mediapipe/ (jamais depuis un CDN). */
+const MEDIAPIPE_WASM_DIR = join(process.cwd(), 'node_modules/@mediapipe/tasks-vision/wasm')
+const MEDIAPIPE_FILES = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm', 'vision_wasm_nosimd_internal.js', 'vision_wasm_nosimd_internal.wasm']
+function mediapipeAssets(): Plugin {
+  return {
+    name: 'hashwall-mediapipe-assets',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const m = req.url?.match(/\/mediapipe\/([\w.]+)$/)
+        if (!m || !MEDIAPIPE_FILES.includes(m[1])) return next()
+        res.setHeader('Content-Type', m[1].endsWith('.wasm') ? 'application/wasm' : 'text/javascript')
+        res.end(readFileSync(join(MEDIAPIPE_WASM_DIR, m[1])))
+      })
+    },
+    generateBundle() {
+      if (this.environment?.config.consumer && this.environment.config.consumer !== 'client') return
+      for (const file of MEDIAPIPE_FILES) {
+        this.emitFile({ type: 'asset', fileName: `mediapipe/${file}`, source: readFileSync(join(MEDIAPIPE_WASM_DIR, file)) })
+      }
+    },
+  }
+}
+
+/** Gros fichiers chargés seulement à l'usage : jamais pré-téléchargés par le service worker. */
+const ON_DEMAND = /^(mediapipe|models)\//
+
+/**
  * Génère /sw.js au build avec la liste exacte des fichiers à pré-cacher (coquille applicative).
  * Le SW ne touche jamais aux requêtes cross-origin (relais, serveurs Blossom) : seules
  * les ressources de l'application sont mises en cache, ce qui permet à la PWA de se
@@ -63,7 +108,7 @@ function serviceWorkerPlugin(): Plugin {
       const publicFiles = listPublicFiles(join(process.cwd(), 'public')).filter(
         (f) => !f.startsWith('_') && f !== 'sw.js',
       )
-      const files = [...Object.keys(bundle).filter((f) => !f.endsWith('.map')), ...publicFiles]
+      const files = [...Object.keys(bundle).filter((f) => !f.endsWith('.map')), ...publicFiles].filter((f) => !ON_DEMAND.test(f))
       const assets = ['./', ...files.map((f) => `./${f}`)]
       const version = createHash('sha256').update(assets.join('\n')).digest('hex').slice(0, 12)
       this.emitFile({
@@ -95,7 +140,7 @@ self.addEventListener('activate', (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((k) => k.startsWith('hashwall-') && k !== CACHE).map((k) => caches.delete(k))),
+        Promise.all(keys.filter((k) => k.startsWith('hashwall-') && k !== CACHE && k !== CACHE + '-ondemand').map((k) => caches.delete(k))),
       )
       .then(() => self.clients.claim()),
   )
@@ -132,6 +177,24 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  // Détecteur de visages (WASM, modèle) : mis en cache au premier usage, puis hors ligne.
+  const path = url.href.slice(self.registration.scope.length)
+  if (/^(mediapipe|models)\//.test(path)) {
+    event.respondWith(
+      caches.open(CACHE + '-ondemand').then((cache) =>
+        cache.match(req).then(
+          (hit) =>
+            hit ||
+            fetch(req).then((res) => {
+              if (res.ok) cache.put(req, res.clone())
+              return res
+            }),
+        ),
+      ),
+    )
+    return
+  }
+
   event.respondWith(caches.match(req).then((hit) => hit || fetch(req)))
 })
 `
@@ -144,7 +207,12 @@ export default defineConfig(({ mode }) => ({
   },
   // Chemins relatifs : indispensable pour IPFS (/ipfs/<cid>/) et les miroirs en sous-dossier.
   base: './',
-  plugins: [react(), tailwindcss(), cspPlugin(mode), serviceWorkerPlugin()],
+  plugins: [react(), tailwindcss(), mediapipeNoTelemetry(), mediapipeAssets(), cspPlugin(mode), serviceWorkerPlugin()],
+  worker: {
+    // Worker classique : le chargeur de MediaPipe utilise importScripts.
+    format: 'iife' as const,
+    plugins: () => [mediapipeNoTelemetry()],
+  },
   build: {
     sourcemap: false,
     // Pas de module inline : compatible avec script-src 'self'.

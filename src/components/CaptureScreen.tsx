@@ -3,7 +3,7 @@ import { MAX_CLIP_MS, MAX_UPLOAD_BYTES } from '../config'
 import { useSettings, useWakeLock } from '../hooks/basics'
 import { formatBytes, formatDuration } from '../lib/format'
 import { detectCaptureSupport } from '../lib/media/mime'
-import { CaptureError, CaptureSession, faceDetectionAvailable, type FilterMode, type Recording } from '../lib/media/recorder'
+import { CaptureError, CaptureSession, type FaceStatus, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
 import { IconCheck, IconClose, IconFace, IconRetry, IconSwitch } from './icons'
@@ -63,7 +63,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   const [recording, setRecording] = useState<Recording | null>(null)
   const [filter, setFilter] = useState<FilterMode>('none')
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
-  const [faceFallback, setFaceFallback] = useState(false)
+  const [faceStatus, setFaceStatus] = useState<FaceStatus>({ state: 'off', trusted: false, count: 0 })
   const total = useMemo(maxDuration, [])
 
   useWakeLock(phase !== 'error')
@@ -95,7 +95,6 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
       const s = session.current
       if (!s) return
       setElapsed(s.elapsedMs())
-      if (s.faceFallback) setFaceFallback(true)
     }, 100)
     return () => clearInterval(id)
   }, [phase])
@@ -123,8 +122,18 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     session.current?.stop()
   }
 
+  // État du détecteur de visages, y compris avant l'enregistrement (chargement du modèle).
+  useEffect(() => {
+    if (filter !== 'faces') return
+    const id = setInterval(() => {
+      const s = session.current
+      if (s) setFaceStatus(s.faceStatus())
+    }, 250)
+    return () => clearInterval(id)
+  }, [filter])
+
   const cycleFilter = () => {
-    const order: FilterMode[] = faceDetectionAvailable() ? ['none', 'faces', 'pixelate'] : ['none', 'pixelate']
+    const order: FilterMode[] = ['none', 'faces', 'pixelate']
     const next = order[(order.indexOf(filter) + 1) % order.length]
     setFilter(next)
     if (session.current) session.current.filter = next
@@ -200,8 +209,23 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
           </div>
 
           {filter !== 'none' && (
-            <p className="absolute inset-x-4 top-24 text-center text-xs text-white/80" role="status">
-              {filter === 'faces' && faceFallback ? 'Détection des visages indisponible : image entière pixelisée par sécurité.' : filter === 'faces' ? 'Les visages détectés sont floutés dans le fichier final.' : 'Toute l’image est pixelisée dans le fichier final.'}
+            <p
+              className="absolute inset-x-4 top-24 rounded-xl bg-black/50 px-3 py-2 text-center text-xs text-white/90 backdrop-blur"
+              role="status"
+              data-testid="face-status"
+              data-state={filter === 'faces' ? faceStatus.state : 'pixelate'}
+              data-trusted={faceStatus.trusted}
+              data-count={faceStatus.count}
+            >
+              {filter === 'pixelate'
+                ? 'Toute l’image est pixelisée dans le fichier final.'
+                : faceStatus.state === 'error'
+                  ? `Détecteur de visages indisponible (${faceStatus.error ?? 'erreur'}) : image entière pixelisée par sécurité.`
+                  : faceStatus.state !== 'ready'
+                    ? 'Chargement du détecteur de visages (≈ 15 Mo, une seule fois)… En attendant, toute l’image est pixelisée.'
+                    : !faceStatus.trusted
+                      ? 'Analyse de toute l’image… En attendant, elle est entièrement pixelisée.'
+                      : `${faceStatus.count} visage${faceStatus.count > 1 ? 's' : ''} flouté${faceStatus.count > 1 ? 's' : ''} dans le fichier final. Visages très lointains ou de profil : préférez « Image pixelisée ».`}
             </p>
           )}
 
