@@ -268,6 +268,7 @@ export function ResilienceSheet({
   const [status, setStatus] = useState<Record<string, Availability>>({})
   const [integrity, setIntegrity] = useState<'idle' | 'running' | { ok: boolean; host?: string; message?: string }>('idle')
   const sha = clip.video.sha256
+  const alsoBy = store?.getSnapshot().items.find((i) => i.clip.key === clip.key)?.alsoBy ?? []
 
   useEffect(() => {
     let cancelled = false
@@ -307,6 +308,25 @@ export function ResilienceSheet({
   return (
     <Sheet title="Résilience et intégrité" onClose={onClose} wide>
       <div className="space-y-5 text-sm">
+        <section data-testid="provenance">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">Provenance</h3>
+          <p className="text-white">
+            Publiée par <span className="font-mono text-xs">{shortNpub(clip.pubkey)}</span>
+          </p>
+          {alsoBy.length > 0 && (
+            <div className="mt-1 text-xs text-muted">
+              <p>
+                Le même fichier a aussi été publié par {alsoBy.length} autre{alsoBy.length > 1 ? 's' : ''} clé{alsoBy.length > 1 ? 's' : ''}.
+                Nostr ne permet pas de savoir avec certitude qui l’a publié en premier : seul un horodatage Bitcoin vérifié le prouve.
+              </p>
+              <ul className="mt-1 font-mono">
+                {alsoBy.slice(0, 10).map((c) => (
+                  <li key={c.id}>{shortNpub(c.pubkey)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
         <section>
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">Empreinte SHA-256 du fichier</h3>
           {sha ? (

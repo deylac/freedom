@@ -185,6 +185,36 @@ describe('WallStore', () => {
     expect(items[0].clip.pubkey).toBe(getPublicKey(alice))
   })
 
+  it('audit F02 : un doublon antidaté par une autre clé n’évince pas l’original', () => {
+    const s = new WallStore('mur', emptyContext())
+    s.ingest(video(alice, 1, { sha: hex(43), createdAt: 1000 }))
+    s.ingest(video(bob, 2, { sha: hex(43), createdAt: 2000, publishedAt: 1 }))
+    const items = s.getSnapshot().items
+    expect(items).toHaveLength(1)
+    expect(items[0].clip.pubkey).toBe(getPublicKey(alice))
+    // Les autres provenances signées restent accessibles.
+    expect(items[0].alsoBy.map((c) => c.pubkey)).toEqual([getPublicKey(bob)])
+  })
+
+  it('audit F02 : masquer l’auteur d’un doublon ne fait pas disparaître l’original (modération avant regroupement)', () => {
+    const muted = { ...emptyMuteList(), pubkeys: new Set([getPublicKey(bob)]) }
+    const s = new WallStore('mur', { ...emptyContext(), localMutes: muted })
+    s.ingest(video(alice, 1, { sha: hex(44), createdAt: 1000 }))
+    // Doublon entièrement antidaté (created_at compris) : il passerait devant sans la règle.
+    s.ingest(video(bob, 2, { sha: hex(44), createdAt: 1, publishedAt: 1 }))
+    const items = s.getSnapshot().items
+    expect(items.map((i) => i.clip.pubkey)).toEqual([getPublicKey(alice)])
+    expect(items[0].alsoBy).toEqual([])
+  })
+
+  it('audit F02 : un modérateur ou une clé de confiance est préféré, le doublon signalé passe après', () => {
+    const mod = generateSecretKey()
+    const s = new WallStore('mur', { ...emptyContext(), moderators: new Set([getPublicKey(mod)]) })
+    s.ingest(video(bob, 1, { sha: hex(45), createdAt: 1 }))
+    s.ingest(video(mod, 2, { sha: hex(45), createdAt: 5000 }))
+    expect(s.getSnapshot().items[0].clip.pubkey).toBe(getPublicKey(mod))
+  })
+
   it('plafonne le nombre de clips par auteur (anti-inondation)', () => {
     const s = new WallStore('mur', emptyContext())
     for (let i = 1; i <= 30; i++) s.ingest(video(alice, i))

@@ -174,6 +174,8 @@ export class CaptureSession {
     this.camera = new MediaStream(tracks)
     this.watchTracks(stream)
     this.facing = next
+    // Les visages détectés sur l'ancienne caméra ne disent rien de la nouvelle image (audit F01).
+    this.tracker?.reset()
     await this.attach(new MediaStream(stream.getVideoTracks()))
   }
 

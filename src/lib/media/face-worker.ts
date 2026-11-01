@@ -15,6 +15,8 @@ import { mergeBoxes, tileGrid, type Box } from './faces'
 export type FaceWorkerIn =
   | { type: 'init'; wasmBase: string; modelUrl: string; modelSha256: string }
   | { type: 'detect'; id: number; frame: ImageBitmap }
+  /** Nouvelle source (changement de caméra) : la couverture par tuiles repart de zéro. */
+  | { type: 'reset' }
 
 export type FaceWorkerOut =
   | { type: 'ready'; ms: number }
@@ -116,6 +118,9 @@ scope.onmessage = (event) => {
   const msg = event.data
   if (msg.type === 'init') {
     init(msg).catch((err: unknown) => scope.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) }))
+  } else if (msg.type === 'reset') {
+    cycle = 0
+    groupBoxes.fill([])
   } else if (msg.type === 'detect') {
     if (!detector) {
       msg.frame.close()

@@ -5,6 +5,7 @@
 import { useMemo, useState } from 'react'
 import { useRelayStatus, useSettings } from '../hooks/basics'
 import { knownMirrors, type Mirror } from '../lib/mirrors'
+import { serviceWorkerState } from '../lib/sw-status'
 import { QrSvg } from './QrModal'
 import { IconLink, IconShare } from './icons'
 import { copyText, Sheet, shareLink, useToast } from './ui'
@@ -21,6 +22,7 @@ export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () 
   const { connected, total } = useRelayStatus(settings.relays)
   const mirrors = useMemo(() => knownMirrors(), [])
   const [qr, setQr] = useState<string | null>(null)
+  const sw = serviceWorkerState()
   const link = (m: Mirror) => (tag ? `${m.url}#${tag}` : m.url)
 
   return (
@@ -30,6 +32,17 @@ export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () 
           HashWall n’a pas de serveur central : la même application est publiée à plusieurs adresses et chacune
           affiche les mêmes murs. Si une adresse est bloquée, utilisez-en une autre. Une fois ouverte, l’application
           installée continue de démarrer même si son adresse est bloquée.
+        </p>
+
+        <p className="text-xs text-muted" data-testid="offline-status">
+          Démarrage hors ligne :{' '}
+          {sw.status === 'actif' ? (
+            <span className="text-ok">actif sur cet appareil</span>
+          ) : sw.status === 'installation' ? (
+            'installation en cours…'
+          ) : (
+            <span className="text-rec">indisponible ({sw.reason})</span>
+          )}
         </p>
 
         <ul className="space-y-2">

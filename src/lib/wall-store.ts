@@ -35,6 +35,8 @@ import {
 export interface WallItem {
   clip: Clip
   verdict: Verdict
+  /** Même fichier (même empreinte) publié par d'autres clés : provenances signées conservées (audit F02). */
+  alsoBy: Clip[]
 }
 
 export interface WallSnapshot {
@@ -323,27 +325,55 @@ export class WallStore {
     }
     const live = [...this.clips.values()].filter((c) => !this.isDeleted(c))
 
-    // Dédoublonnage par contenu : un même fichier republié par d'autres clés ne garde que l'original.
-    const originals = new Map<string, Clip>()
-    for (const c of live) {
-      const sha = c.video.sha256
-      if (!sha) continue
-      const prev = originals.get(sha)
-      if (!prev || c.publishedAt < prev.publishedAt) originals.set(sha, c)
+    // 1. Modération AVANT tout regroupement : masquer un doublon ne doit jamais masquer l'original.
+    const judged: WallItem[] = []
+    for (const clip of live) {
+      const verdict = evaluateClip(clip, this.reportersFor(clip), ctx)
+      if (verdict.status !== 'hidden') judged.push({ clip, verdict, alsoBy: [] })
     }
-    const unique = live.filter((c) => !c.video.sha256 || originals.get(c.video.sha256) === c)
 
-    unique.sort((a, b) => b.publishedAt - a.publishedAt || b.createdAt - a.createdAt || (a.id < b.id ? -1 : 1))
+    // 2. Regroupement par contenu (anti-inondation par republication). Aucune date autodéclarée
+    //    (published_at) ne désigne l'« original » : on préfère une vidéo non signalée, puis un
+    //    modérateur ou une clé qu'il suit, puis la plus ancienne SIGNATURE (created_at).
+    //    Limite connue : created_at reste déclaré par l'auteur ; d'où la conservation de TOUTES
+    //    les provenances (alsoBy), visibles dans la fiche de la vidéo.
+    const rank = (i: WallItem) => [
+      i.verdict.status === 'visible' ? 0 : 1,
+      ctx.moderators.has(i.clip.pubkey) ? 0 : ctx.trusted.has(i.clip.pubkey) ? 1 : 2,
+      i.clip.createdAt,
+    ]
+    const better = (a: WallItem, b: WallItem) => {
+      const ra = rank(a)
+      const rb = rank(b)
+      for (let k = 0; k < ra.length; k++) if (ra[k] !== rb[k]) return ra[k] < rb[k]
+      return a.clip.id < b.clip.id
+    }
+    const groups = new Map<string, WallItem[]>()
+    const unique: WallItem[] = []
+    for (const item of judged) {
+      const sha = item.clip.video.sha256
+      if (!sha) {
+        unique.push(item)
+        continue
+      }
+      const group = groups.get(sha) ?? []
+      group.push(item)
+      groups.set(sha, group)
+    }
+    for (const group of groups.values()) {
+      const best = group.reduce((a, b) => (better(b, a) ? b : a))
+      unique.push({ ...best, alsoBy: group.filter((i) => i !== best).map((i) => i.clip) })
+    }
+
+    unique.sort((a, b) => b.clip.publishedAt - a.clip.publishedAt || b.clip.createdAt - a.clip.createdAt || (a.clip.id < b.clip.id ? -1 : 1))
 
     const perAuthor = new Map<string, number>()
     const items: WallItem[] = []
-    for (const clip of unique) {
-      const n = (perAuthor.get(clip.pubkey) ?? 0) + 1
-      perAuthor.set(clip.pubkey, n)
+    for (const item of unique) {
+      const n = (perAuthor.get(item.clip.pubkey) ?? 0) + 1
+      perAuthor.set(item.clip.pubkey, n)
       if (n > MAX_CLIPS_PER_AUTHOR) continue
-      const verdict = evaluateClip(clip, this.reportersFor(clip), ctx)
-      if (verdict.status === 'hidden') continue
-      items.push({ clip, verdict })
+      items.push(item)
     }
     return items
   }

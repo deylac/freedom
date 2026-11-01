@@ -136,3 +136,14 @@ Légende : ✅ traité dans le code · ⚠️ atténué, limite résiduelle · �
 | 9.5 | Les messageries qui recompressent les vidéos détruisent le paquet (et l'empreinte). | ⚠️ Message « envoyer comme fichier » ; le fichier refusé est signalé clairement au porteur. |
 | 9.6 | Web Share sur Safari exige un geste utilisateur **immédiat** : signer puis partager dans le même clic échouerait. | ✅ Deux temps : préparation à l'ouverture de la feuille, partage sur un second geste. |
 | 9.7 | Mur vide quand le réseau bloque les relais : indiscernable d'un mur sans vidéos. | ✅ Bandeau après 12 s sans relais, conseils et adresses de secours (testé avec un relais injoignable). |
+
+## 10. Audit développeur du 1ᵉʳ nov. 2026 (commit `c4f2137`)
+
+Neuf défauts reproduits par un audit externe en lecture seule ; chacun a reçu un test de régression
+qui échoue sur l'ancien code.
+
+| # | Constat | Traitement |
+|---|---|---|
+| F05 | **Service worker invalide en production** : la chaîne modèle de `vite.config.ts` consommait l'antislash de `/^(mediapipe\|models)\//` ; `dist/sw.js` ne compilait pas, l'erreur était avalée. Le démarrage hors ligne et la relance après blocage du domaine (4.7) ne fonctionnaient donc pas. | ✅ Source dédiée `sw/service-worker.js`, le build échoue si `sw.js` ne compile pas (`node:vm`), état visible dans « Adresses de secours » ; E2E : enregistrement manuel du SW puis relance **hors ligne**. |
+| F01 | Masques de visages expirés après 1,2 s mais confiance gardée 2,5 s (comptées à la réception) : jusqu'à ~1,3 s sans aucun masque si le détecteur cessait de répondre. | ✅ `face-history.ts` : masques et confiance expirent **ensemble**, datés par l'heure de **capture** ; changement de caméra = confiance perdue et résultats antérieurs ignorés. Tests aux seuils. |
+| F02 | Dédoublonnage par empreinte choisissant le `published_at` le plus ancien (autodéclaré) et appliqué **avant** la modération : un doublon antidaté d'une autre clé évinçait l'original, et le masquer faisait disparaître les deux. | ✅ Modération d'abord ; représentant = non signalé, puis modérateur/clé de confiance, puis signature la plus ancienne ; **toutes les provenances** gardées (`alsoBy`) et affichées dans « Résilience et intégrité ». Limite : `created_at` reste déclaratif, seul un horodatage Bitcoin vérifié prouve l'antériorité. |

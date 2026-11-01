@@ -515,6 +515,34 @@ await step('Hors ligne : paquet signé confié à un proche, vérifié puis publ
 })
 
 // ---------------------------------------------------------------------------
+// Service worker (audit F05) : désactivé en mode e2e, on l'enregistre ici à la main.
+
+await step('Service worker : installation, puis relance de l’application hors ligne', async () => {
+  const page = await newPage({ mobile: true })
+  await page.goto(`${APP}#horsreseau`)
+  await page.getByRole('button', { name: /Filmer pour #horsreseau/ }).waitFor()
+  const state = await page.evaluate(async () => {
+    try {
+      await navigator.serviceWorker.register('./sw.js', { scope: './' })
+      const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('activation trop longue')), 15_000))])
+      return reg.active ? 'actif' : 'inactif'
+    } catch (err) {
+      return `échec : ${err.message}`
+    }
+  })
+  assert.equal(state, 'actif', `service worker ${state}`)
+  await page.reload()
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10_000 })
+  await page.context().setOffline(true)
+  await page.reload()
+  await page.getByRole('button', { name: /Filmer pour #horsreseau/ }).waitFor({ timeout: 10_000 })
+  await page.evaluate(() => (location.hash = '#autre'))
+  await page.getByRole('button', { name: /Filmer pour #autre/ }).waitFor({ timeout: 5_000 })
+  await page.context().close()
+  return 'coquille applicative servie hors ligne'
+})
+
+// ---------------------------------------------------------------------------
 // Test 1 (suite) — changement de hashtag sans requête HTTP
 
 await step('Routage : passage à #15octobre sans requête au serveur web', async () => {
