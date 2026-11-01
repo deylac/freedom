@@ -125,7 +125,20 @@ export class WallStore {
 
   // ----- ingestion --------------------------------------------------------
 
+  /** Événements rejetés parce qu'ils faisaient échouer le traitement (observable, sans contenu). */
+  rejected = 0
+
+  /** Frontière de traitement : un événement malformé ne doit jamais bloquer les suivants (audit F08). */
   ingest(event: NostrEvent): void {
+    try {
+      this.ingestUnsafe(event)
+    } catch {
+      this.rejected++
+      if (this.rejected <= 3) console.warn(`[HashWall] événement ignoré (kind ${Number(event?.kind)}) : format invalide`)
+    }
+  }
+
+  private ingestUnsafe(event: NostrEvent): void {
     switch (event.kind) {
       case KIND_SHORT_VIDEO:
       case KIND_LEGACY_SHORT_VIDEO:

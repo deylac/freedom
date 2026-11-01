@@ -215,6 +215,17 @@ describe('WallStore', () => {
     expect(s.getSnapshot().items[0].clip.pubkey).toBe(getPublicKey(mod))
   })
 
+  it('audit F08 : un événement malformé entre deux valides ne bloque pas le traitement', () => {
+    const s = new WallStore('mur', emptyContext())
+    s.ingest(video(alice, 1))
+    const bad = { ...video(bob, 2), tags: [['t', 'mur'], ['d', 'x'], ['imeta', 'constructor boum', '__proto__ boum'], null] } as never
+    s.ingest(bad)
+    s.ingest({ kind: 1984, tags: null } as never)
+    s.ingest(video(alice, 3))
+    expect(s.getSnapshot().items.map((i) => i.clip.title)).toEqual(['clip 3', 'clip 1'])
+    expect(s.rejected).toBeGreaterThan(0)
+  })
+
   it('plafonne le nombre de clips par auteur (anti-inondation)', () => {
     const s = new WallStore('mur', emptyContext())
     for (let i = 1; i <= 30; i++) s.ingest(video(alice, i))

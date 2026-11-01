@@ -31,16 +31,31 @@ export const nowSeconds = (): number => Math.floor(Date.now() / 1000)
 export type ImetaFields = Record<string, string[]>
 
 /** Analyse un tag imeta : chaque entrée est « clé valeur », la valeur pouvant contenir des espaces. */
+const IMETA_KEY = /^[a-z][a-z0-9_-]{0,31}$/
+const IMETA_MAX_FIELDS = 64
+const IMETA_MAX_VALUE = 16 * 1024
+
+/**
+ * Lit un tag imeta (NIP-92). Données EXTERNES : dictionnaire sans prototype (une clé `constructor`
+ * ou `__proto__` faisait planter le traitement, audit F08), clés au format attendu, nombre de
+ * champs et taille des valeurs bornés.
+ */
 export function parseImeta(tag: string[]): ImetaFields {
-  const fields: ImetaFields = {}
-  for (const entry of tag.slice(1)) {
-    if (typeof entry !== 'string') continue
+  const fields: ImetaFields = Object.create(null) as ImetaFields
+  let count = 0
+  for (const entry of tag.slice(1, 1 + IMETA_MAX_FIELDS * 4)) {
+    if (typeof entry !== 'string' || entry.length > IMETA_MAX_VALUE) continue
     const i = entry.indexOf(' ')
     if (i <= 0) continue
     const key = entry.slice(0, i)
     const value = entry.slice(i + 1).trim()
-    if (!value) continue
-    ;(fields[key] ??= []).push(value)
+    if (!value || !IMETA_KEY.test(key)) continue
+    const list = fields[key]
+    if (list) list.push(value)
+    else if (count < IMETA_MAX_FIELDS) {
+      fields[key] = [value]
+      count++
+    }
   }
   return fields
 }

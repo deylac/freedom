@@ -185,3 +185,23 @@ describe('buildDeletionEvent (NIP-09)', () => {
     ])
   })
 })
+
+describe('métadonnées malformées (audit F08)', () => {
+  it('parseImeta ne plante pas sur des clés héritées d’Object', () => {
+    for (const key of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const fields = parseImeta(['imeta', `${key} valeur`, 'url https://a.example/x.mp4'])
+      expect(fields.url).toEqual(['https://a.example/x.mp4'])
+      // Clé au format attendu : conservée comme donnée ; sinon (majuscules, _) ignorée.
+      expect(fields[key]).toEqual(key === 'constructor' ? ['valeur'] : undefined)
+    }
+    expect(Object.getPrototypeOf(parseImeta(['imeta']))).toBeNull()
+  })
+
+  it('parseImeta borne le nombre de champs, la taille des valeurs et le format des clés', () => {
+    const many = ['imeta', ...Array.from({ length: 500 }, (_, i) => `k${i} v`)]
+    expect(Object.keys(parseImeta(many)).length).toBeLessThanOrEqual(64)
+    expect(parseImeta(['imeta', `url ${'x'.repeat(100_000)}`]).url).toBeUndefined()
+    expect(parseImeta(['imeta', 'CLÉ bizarre valeur', 'x' + ' '.repeat(3) + 'y']).x).toEqual(['y'])
+    expect(Object.keys(parseImeta(['imeta', 'CLÉ bizarre valeur']))).toEqual([])
+  })
+})
