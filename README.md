@@ -10,6 +10,8 @@ public accessible par une simple URL à fragment : `https://votre-domaine/#14oct
 
 > L'analyse des angles morts du cahier des charges (contradictions, risques non couverts, points
 > non vérifiables ici) est dans **[docs/ANGLES-MORTS.md](docs/ANGLES-MORTS.md)**. À lire avant toute mise en production.
+> La suite du projet (tâches, conceptions déjà tranchées, critères d'acceptation) est dans
+> **[docs/FEUILLE-DE-ROUTE.md](docs/FEUILLE-DE-ROUTE.md)** ; les consignes pour Claude Code dans [CLAUDE.md](CLAUDE.md).
 
 ## Démarrer
 
