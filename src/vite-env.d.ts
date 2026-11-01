@@ -8,4 +8,6 @@ interface ImportMetaEnv {
   readonly VITE_MODERATORS?: string
   readonly VITE_FEATURED_TAGS?: string
   readonly VITE_REPORT_THRESHOLD?: string
+  readonly VITE_OTS_CALENDARS?: string
+  readonly VITE_BTC_EXPLORERS?: string
 }

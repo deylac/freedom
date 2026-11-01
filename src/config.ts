@@ -64,6 +64,17 @@ export const LEGACY_DEFAULT_BLOSSOM_SERVERS = [
   ],
 ]
 
+/**
+ * Horodatage OpenTimestamps : calendriers acceptant les requêtes de navigateur (CORS vérifié par la
+ * sonde ; btc.calendar.catallaxy.com n'envoie pas d'en-tête CORS) et explorateurs Bitcoin croisés.
+ */
+export const DEFAULT_OTS_CALENDARS = list(env.VITE_OTS_CALENDARS, [
+  'https://alice.btc.calendar.opentimestamps.org',
+  'https://bob.btc.calendar.opentimestamps.org',
+  'https://finney.calendar.eternitywall.com',
+])
+export const DEFAULT_BTC_EXPLORERS = list(env.VITE_BTC_EXPLORERS, ['https://blockstream.info/api', 'https://mempool.space/api'])
+
 /** Clés publiques (hex ou npub) de collectifs de modération dont on applique les listes kind:10000. */
 export const DEFAULT_MODERATORS = list(env.VITE_MODERATORS, [])
 

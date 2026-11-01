@@ -21,6 +21,8 @@ export interface MyClip {
   publishedAt: number
   posterUrl?: string
   url: string
+  /** Preuve OpenTimestamps publiée (base64). */
+  ots?: string
 }
 
 type Listener = () => void

@@ -1,5 +1,7 @@
 import {
   DEFAULT_BLOSSOM_SERVERS,
+  DEFAULT_BTC_EXPLORERS,
+  DEFAULT_OTS_CALENDARS,
   LEGACY_DEFAULT_BLOSSOM_SERVERS,
   DEFAULT_MODERATORS,
   DEFAULT_RELAYS,
@@ -25,6 +27,10 @@ export interface Settings {
   keepDeletionKeys: boolean
   termsAcceptedVersion: number
   installBannerDismissed: boolean
+  /** Calendriers OpenTimestamps (liste blanche : seuls ceux-ci sont contactés). */
+  otsCalendars: string[]
+  /** Explorateurs Bitcoin (API Esplora) utilisés pour vérifier les preuves. */
+  btcExplorers: string[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -39,6 +45,8 @@ export const DEFAULT_SETTINGS: Settings = {
   keepDeletionKeys: true,
   termsAcceptedVersion: 0,
   installBannerDismissed: false,
+  otsCalendars: DEFAULT_OTS_CALENDARS,
+  btcExplorers: DEFAULT_BTC_EXPLORERS,
 }
 
 const KEY = 'settings'

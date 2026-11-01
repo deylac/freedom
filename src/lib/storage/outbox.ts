@@ -19,7 +19,7 @@ export interface BlobInfo {
 /** Résultat d'une étape sur un serveur : rend visibles les refus même quand l'envoi a réussi ailleurs. */
 export interface Diagnostic {
   server: string
-  step: 'envoi' | 'miroir'
+  step: 'envoi' | 'miroir' | 'horodatage'
   ok: boolean
   detail: string
 }
@@ -48,6 +48,8 @@ export interface OutboxJob {
   lastError?: string
   attempts: number
   diagnostics?: Diagnostic[]
+  /** Preuve OpenTimestamps (base64) de l'empreinte de la vidéo. */
+  ots?: string
   timings: { recordedAt: number; uploadedAt?: number; publishedAt?: number; mirroredAt?: number }
 }
 

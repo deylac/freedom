@@ -25,6 +25,8 @@ import {
   type BlobDescriptor,
 } from './blossom/client'
 import { markHealthy, orderByHealth, penalize, penaltyOf } from './blossom/health'
+import { stampDigest } from './ots/client'
+import { serializeOts, toBase64 } from './ots/ots'
 import { hostOf, normalizeServer } from './blossom/urls'
 import { sha256Hex } from './media/hash'
 import type { Recording } from './media/recorder'
@@ -160,9 +162,21 @@ export function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-function diag(job: OutboxJob, server: string, step: 'envoi' | 'miroir', ok: boolean, detail: string) {
+function diag(job: OutboxJob, server: string, step: Diagnostic['step'], ok: boolean, detail: string) {
   ;(job.diagnostics ??= []).push({ server: hostOf(server), step, ok, detail })
 }
+
+// ---------------------------------------------------------------------------
+// Horodatage OpenTimestamps de l'empreinte du fichier (voir src/lib/ots/client.ts)
+
+async function stampVideo(job: OutboxJob): Promise<string | undefined> {
+  const { file, calendars } = await stampDigest(hexToBytes(job.video.sha256), { calendars: getSettings().otsCalendars, timeoutMs: 8000 })
+  for (const c of calendars) diag(job, c.url, 'horodatage', c.ok, c.ok ? 'empreinte soumise (ancrage Bitcoin sous 24 h)' : (c.error ?? 'échec'))
+  return file ? toBase64(serializeOts(file)) : undefined
+}
+
+const within = <T>(p: Promise<T>, ms: number) =>
+  Promise.race([p, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))])
 
 // ---------------------------------------------------------------------------
 // Étapes
@@ -277,6 +291,7 @@ function buildEvent(job: OutboxJob, createdAt: number) {
       size: job.video.size,
       images: [job.posterUrl, ...job.posterMirrors].filter((u): u is string => !!u),
       fallbacks: job.mirrors,
+      ots: job.ots,
     },
   })
 }
@@ -298,6 +313,7 @@ function rememberClip(job: OutboxJob) {
     publishedAt: job.publishedAt!,
     posterUrl: job.posterUrl,
     url: job.primary!.url,
+    ots: job.ots,
   }
   saveMyClip(record)
 }
@@ -337,6 +353,8 @@ export async function runPublishPhase(job: OutboxJob, onProgress: (p: Progress) 
   job.attempts++
   if (!job.primary) job.diagnostics = []
   const { signer, token, targets } = await prepare(job)
+  // L'empreinte est connue avant l'envoi : l'horodatage se fait en parallèle, sans retarder le mur.
+  const otsPromise = job.ots ? Promise.resolve(job.ots) : stampVideo(job).catch(() => undefined)
 
   if (!job.primary) {
     // Serveurs sains d'abord ; ceux qui ont récemment expiré ne sont essayés qu'en dernier recours.
@@ -352,6 +370,7 @@ export async function runPublishPhase(job: OutboxJob, onProgress: (p: Progress) 
 
   if (!job.eventId) {
     onProgress({ stage: 'publishing', message: 'Publication sur les relais Nostr…' })
+    job.ots ??= await within(otsPromise, 3000)
     const createdAt = nowSeconds()
     job.publishedAt ??= createdAt
     const event = await signer.sign(buildEvent(job, createdAt))
@@ -377,7 +396,10 @@ const MAX_FALLBACKS = 4
  */
 export async function runMirrorPhase(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<void> {
   const { signer, token, targets } = await prepare(job)
-  job.diagnostics = (job.diagnostics ?? []).filter((d) => d.step === 'envoi')
+  job.diagnostics = (job.diagnostics ?? []).filter((d) => d.step !== 'miroir')
+  // Horodatage manqué sur la voie urgente (calendriers lents) : nouvel essai, inclus dans la v2.
+  const hadOts = !!job.ots
+  const otsPromise = job.ots ? Promise.resolve(job.ots) : stampVideo(job).catch(() => undefined)
   const primary = job.primary!
   const remaining = targets.filter((s) => !job.servers.includes(s))
   const { healthy, penalized } = orderByHealth(remaining)
@@ -457,8 +479,9 @@ export async function runMirrorPhase(job: OutboxJob, onProgress: (p: Progress) =
     for (const url of copies) if (url) job.posterMirrors.push(url)
   }
   job.timings.mirroredAt = Date.now()
+  job.ots ??= await within(otsPromise, 10_000)
 
-  if (job.mirrors.length > 0) {
+  if (job.mirrors.length > 0 || (!hadOts && job.ots)) {
     onProgress({ stage: 'publishing', message: 'Ajout des miroirs à la publication…' })
     const createdAt = Math.max(nowSeconds(), (job.eventCreatedAt ?? 0) + 1)
     const event = await signer.sign(buildEvent(job, createdAt))

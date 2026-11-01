@@ -9,6 +9,8 @@ import { shortNpub } from '../lib/nostr/signer'
 import { reportClip } from '../lib/publish'
 import { hideClip, muteAuthor, unhideClip } from '../lib/storage/personal'
 import { useSettings } from '../hooks/basics'
+import { upgradeProof, verifyProof, type ProofStatus } from '../lib/ots/client'
+import { fromBase64, hexToBytes, parseOts, serializeOts } from '../lib/ots/ots'
 import { clipShareUrl, useExtraServers } from './Clip'
 import { useCandidates, type SourceState } from './ResilientVideo'
 import type { WallStore } from '../lib/wall-store'
@@ -155,6 +157,69 @@ export function ClipMenu({
 }
 
 // ---------------------------------------------------------------------------
+// Horodatage Bitcoin (OpenTimestamps) de l'empreinte du fichier
+
+function OtsSection({ clip }: { clip: Clip }) {
+  const settings = useSettings()
+  const toast = useToast()
+  const { ots, sha256 } = clip.video
+  const [status, setStatus] = useState<'idle' | 'running' | ProofStatus>('idle')
+  const [proof, setProof] = useState<Uint8Array | null>(null)
+  const ext = extFromMime(clip.video.mime ?? 'video/mp4')
+
+  if (!ots || !sha256) {
+    return <p className="text-xs text-muted">Aucune preuve d’horodatage n’accompagne cette vidéo.</p>
+  }
+
+  // Contacte calendriers (liste blanche) et explorateurs Bitcoin seulement sur demande.
+  const verify = async () => {
+    setStatus('running')
+    try {
+      const file = parseOts(fromBase64(ots))
+      await upgradeProof(file, { calendars: settings.otsCalendars }).catch(() => false)
+      setProof(serializeOts(file))
+      setStatus(await verifyProof(file, hexToBytes(sha256), { explorers: settings.btcExplorers }))
+    } catch (err) {
+      setStatus({ state: 'invalid', reason: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  const download = () => {
+    saveBlob(new Blob([(proof ?? fromBase64(ots)) as BlobPart], { type: 'application/octet-stream' }), `${sha256}.${ext}.ots`)
+    toast('Preuve téléchargée. Vérification indépendante : ots verify fichier.ots', 'ok')
+  }
+
+  return (
+    <div className="space-y-2" data-testid="ots">
+      <div className="flex flex-wrap gap-2">
+        <Button variant="ghost" onClick={verify} disabled={status === 'running'}>
+          {status === 'running' ? 'Vérification…' : 'Vérifier l’ancrage Bitcoin'}
+        </Button>
+        <Button variant="ghost" onClick={download}>
+          <IconDownload size={16} /> Preuve .ots
+        </Button>
+      </div>
+      {typeof status === 'object' && (
+        <p className={`text-sm ${status.state === 'verified' ? 'text-ok' : status.state === 'invalid' ? 'text-rec' : 'text-white/85'}`} data-state={status.state}>
+          {status.state === 'verified'
+            ? `✓ Ce fichier existait avant le bloc Bitcoin n° ${status.height} (${absoluteDate(status.time)}) — confirmé par ${status.sources.join(' et ')}.`
+            : status.state === 'pending'
+              ? 'Preuve en attente d’ancrage dans Bitcoin (en général moins de 24 h après la publication). Réessayez plus tard.'
+              : status.state === 'unverifiable'
+                ? `Ancrée au bloc ${status.height}, mais ${status.reason}.`
+                : `Preuve invalide : ${status.reason}.`}
+        </p>
+      )}
+      <p className="text-xs text-muted">
+        L’empreinte de la vidéo est horodatée dans la blockchain Bitcoin (OpenTimestamps) : cela prouve que ce fichier exact
+        existait à cette date, sans révéler son contenu. Vérifiable hors de HashWall avec l’outil standard
+        <code className="mx-1 text-white/80">ots verify</code>.
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Fiche de résilience (badge bouclier)
 
 type Availability = 'checking' | 'ok' | 'down'
@@ -258,6 +323,11 @@ export function ResilienceSheet({
               </li>
             ))}
           </ul>
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Horodatage Bitcoin</h3>
+          <OtsSection clip={clip} />
         </section>
 
         <section className="grid gap-3 sm:grid-cols-2">

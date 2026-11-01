@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import { extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startBlossom } from './mock-blossom.mjs'
+import { startOts } from './mock-ots.mjs'
 import { startRelay } from './mock-relay.mjs'
 
 const require = createRequire(import.meta.url)
@@ -38,12 +39,15 @@ const B = await startBlossom(3002)
 const C = await startBlossom(3003, { mirror: false }) // pas de BUD-04 → repli envoi direct
 const D = await startBlossom(3004, { refuseUploads: true }) // refuse toute clé inconnue
 const E = await startBlossom(3005, { delayMs: 35_000 }) // antivirus lent : répond 35 s après réception (cas réel nostr.build)
+const OTS = await startOts(3010, 3011)
 
 const settings = {
   relays: [relay.url],
   blossomServers: [D.base, A.base, B.base, C.base],
   termsAcceptedVersion: 0,
   installBannerDismissed: true,
+  otsCalendars: [OTS.calendarUrl],
+  btcExplorers: [OTS.explorerUrl],
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +324,36 @@ await step('Censure (IP en trou noir, aucune réponse) : bascule après délai',
 })
 
 // ---------------------------------------------------------------------------
+// Horodatage OpenTimestamps de l'empreinte du fichier
+
+await step('Horodatage Bitcoin : preuve dans imeta, en attente puis vérifiée, .ots téléchargeable', async () => {
+  const v = videoEvents().at(-1)
+  const sha = imeta(v).x[0]
+  const ots = Buffer.from(imeta(v).ots?.[0] ?? '', 'base64')
+  assert.ok(ots.length > 60, 'pas de preuve OpenTimestamps dans imeta')
+  // en-tête (31 octets) + version + opération sha256 (0x08) + empreinte de la VIDÉO
+  assert.equal(ots[32], 0x08)
+  assert.equal(ots.subarray(33, 65).toString('hex'), sha, 'la preuve ne porte pas sur le fichier vidéo')
+  assert.ok(OTS.state.submitted.length >= 1 && !OTS.state.submitted.includes(sha), 'le calendrier ne doit recevoir que sha256(empreinte ‖ nonce)')
+
+  const card = viewer.locator('[data-clip-key]').first()
+  await card.getByRole('button', { name: 'Résilience et intégrité' }).click()
+  await viewer.getByRole('button', { name: 'Vérifier l’ancrage Bitcoin' }).click()
+  await viewer.locator('[data-testid=ots] [data-state=pending]').waitFor({ timeout: 10_000 })
+  OTS.state.upgraded = true
+  await viewer.getByRole('button', { name: 'Vérifier l’ancrage Bitcoin' }).click()
+  await viewer.locator('[data-testid=ots] [data-state=verified]').waitFor({ timeout: 10_000 })
+  const text = await viewer.locator('[data-testid=ots] [data-state=verified]').innerText()
+  assert.match(text, /bloc Bitcoin n° 800000/)
+  const [download] = await Promise.all([viewer.waitForEvent('download'), viewer.getByRole('button', { name: /Preuve \.ots/ }).click()])
+  const file = readFileSync(await download.path())
+  assert.equal(file.subarray(33, 65).toString('hex'), sha)
+  assert.ok(file.length > ots.length, 'la preuve téléchargée devrait inclure l’attestation Bitcoin')
+  await viewer.keyboard.press('Escape')
+  return `${ots.length} octets publiés → ${file.length} octets complétés ; ${text.slice(0, 60)}…`
+})
+
+// ---------------------------------------------------------------------------
 // Test 6 — Signalement
 
 await step('Signalement : kind 1984 (e, p, x) + PUT /report, vidéo masquée', async () => {
@@ -464,6 +498,7 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
   const faceBrowser = await chromium.launch({
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${video}`, '--no-proxy-server'],
   })
+  try {
   const context = await faceBrowser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera', 'microphone'] })
   await context.addInitScript((s) => localStorage.setItem('hw:settings', JSON.stringify(s)), { ...settings, termsAcceptedVersion: 1 })
   const external = []
@@ -493,8 +528,83 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
   after.faces.forEach((f, i) => assert.ok(f > 0.8, `visage ${i} (${FACES[i].w} px) non flouté : platitude ${f.toFixed(2)} (avant ${base.faces[i].toFixed(2)})`))
   assert.ok(after.bg < 0.2, `le fond ne devrait plus être pixelisé (platitude ${after.bg.toFixed(2)})`)
   assert.deepEqual(external, [], `requêtes externes : ${external.join(', ')}`)
-  await faceBrowser.close()
   return `${count} visages détectés ; platitude des visages ${FACES.map((f, i) => `${f.w}px ${base.faces[i].toFixed(2)}→${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
+  } finally {
+    await faceBrowser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Voix anonymisée : mesure hors ligne du vocodeur (src/lib/media/voice.ts)
+
+await step('Voix robot : la hauteur de la voix d’origine disparaît, le rythme reste', async () => {
+  const ts = require('typescript')
+  const source = readFileSync(new URL('../src/lib/media/voice.ts', import.meta.url), 'utf8')
+  const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
+  const page = await browser.newPage()
+  const r = await page.evaluate(async (code) => {
+    const mod = await import(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })))
+    const SR = 48000, SECONDS = 3
+    const ctx = new OfflineAudioContext(2, SR * SECONDS, SR)
+    // « Voix » de test : hauteur montant de 100 à 220 Hz, volume modulé à 3 Hz (syllabes)
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(100, 0)
+    osc.frequency.linearRampToValueAtTime(220, SECONDS)
+    const am = ctx.createGain()
+    am.gain.value = 0.5
+    const lfo = ctx.createOscillator()
+    lfo.frequency.value = 3
+    const depth = ctx.createGain()
+    depth.gain.value = 0.48
+    lfo.connect(depth).connect(am.gain)
+    const level = ctx.createGain()
+    level.gain.value = 0.3
+    osc.connect(am).connect(level)
+    const merger = ctx.createChannelMerger(2)
+    level.connect(merger, 0, 0)
+    const out = ctx.createGain()
+    const vocoder = mod.buildVocoder(ctx, level, out)
+    out.connect(merger, 0, 1)
+    merger.connect(ctx.destination)
+    osc.start(); lfo.start(); vocoder.start()
+    const buf = await ctx.startRendering()
+    const input = buf.getChannelData(0), output = buf.getChannelData(1)
+    const rms = (x, a, n) => { let e = 0; for (let i = a; i < a + n; i++) e += x[i] * x[i]; return Math.sqrt(e / n) }
+    const pitch = (x, a, n) => {
+      let best = 0, lagBest = 0
+      const r0 = (() => { let e = 0; for (let i = a; i < a + n; i++) e += x[i] * x[i]; return e })()
+      for (let lag = Math.floor(SR / 400); lag <= Math.ceil(SR / 70); lag++) {
+        let e = 0
+        for (let i = a; i < a + n - lag; i++) e += x[i] * x[i + lag]
+        if (e / r0 > best) { best = e / r0; lagBest = lag }
+      }
+      return SR / lagBest
+    }
+    const W = 2400 // 50 ms
+    const windows = []
+    for (let a = SR * 0.2; a + W < SR * SECONDS; a += W) windows.push(a)
+    const outLevels = windows.map((a) => rms(output, a, W))
+    const loud = Math.max(...outLevels) * 0.2
+    const f0in = [], f0out = []
+    windows.forEach((a, i) => { if (outLevels[i] > loud) { f0in.push(pitch(input, a, W)); f0out.push(pitch(output, a, W)) } })
+    const E = 960 // 20 ms
+    const envIn = [], envOut = []
+    for (let a = SR * 0.2; a + E < SR * SECONDS; a += E) { envIn.push(rms(input, a, E)); envOut.push(rms(output, a, E)) }
+    const mean = (v) => v.reduce((s, x) => s + x, 0) / v.length
+    const mi = mean(envIn), mo = mean(envOut)
+    let num = 0, di = 0, dO = 0
+    for (let i = 0; i < envIn.length; i++) { num += (envIn[i] - mi) * (envOut[i] - mo); di += (envIn[i] - mi) ** 2; dO += (envOut[i] - mo) ** 2 }
+    return { f0in, f0out, corr: num / Math.sqrt(di * dO), rmsIn: rms(input, 0, input.length), rmsOut: rms(output, 0, output.length) }
+  }, code)
+  await page.close()
+  const span = Math.max(...r.f0in) - Math.min(...r.f0in)
+  const near = r.f0out.filter((f) => Math.abs(f - 110) <= 6).length / r.f0out.length
+  assert.ok(span > 80, `la voix d’entrée devrait varier (${span.toFixed(0)} Hz)`)
+  assert.ok(near >= 0.85, `hauteur de sortie non fixe : ${r.f0out.map((f) => f.toFixed(0)).join(',')}`)
+  assert.ok(r.corr > 0.6, `rythme non conservé (corrélation ${r.corr.toFixed(2)})`)
+  assert.ok(r.rmsOut > r.rmsIn * 0.2 && r.rmsOut < r.rmsIn * 5, `niveau de sortie anormal (${r.rmsOut.toFixed(3)} pour ${r.rmsIn.toFixed(3)})`)
+  return `entrée ${Math.min(...r.f0in).toFixed(0)}→${Math.max(...r.f0in).toFixed(0)} Hz ; sortie à 110 ± 6 Hz sur ${(near * 100).toFixed(0)} % des fenêtres ; corrélation du rythme ${r.corr.toFixed(2)} ; niveau ${r.rmsIn.toFixed(3)}→${r.rmsOut.toFixed(3)}`
 })
 
 // ---------------------------------------------------------------------------
@@ -518,7 +628,12 @@ await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', 
 // ---------------------------------------------------------------------------
 
 await browser.close()
-await Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), E.close(), new Promise((r) => web.close(r))])
+// Fermeture bornée : une connexion restée ouverte ne doit jamais bloquer la fin de la suite.
+web.closeAllConnections?.()
+await Promise.race([
+  Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), E.close(), OTS.close(), new Promise((r) => web.close(r))]),
+  new Promise((r) => setTimeout(r, 3000)),
+])
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length}/${results.length} tests réussis${mimeUsed ? ` — format enregistré par Chromium : ${mimeUsed}` : ''}\n`)
 process.exit(failed.length ? 1 : 0)

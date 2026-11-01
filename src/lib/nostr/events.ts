@@ -64,7 +64,11 @@ export interface VideoVariant {
   images: string[]
   fallbacks: string[]
   alt?: string
+  /** Preuve OpenTimestamps (.ots en base64) de l'empreinte `sha256` du fichier. */
+  ots?: string
 }
+
+const OTS_B64 = /^[A-Za-z0-9+/]{40,16000}={0,2}$/
 
 function parseDim(value?: string): { width?: number; height?: number } {
   const m = value?.match(/^(\d{1,5})x(\d{1,5})$/)
@@ -92,6 +96,7 @@ export function variantFromImeta(fields: ImetaFields): VideoVariant | null {
     images: (fields.image ?? []).filter(isAllowedMediaUrl),
     fallbacks: (fields.fallback ?? []).filter(isAllowedMediaUrl),
     alt: fields.alt?.[0],
+    ots: fields.ots?.[0] && OTS_B64.test(fields.ots[0]) ? fields.ots[0] : undefined,
   }
 }
 
@@ -119,6 +124,7 @@ export interface VideoEventInput {
     size: number
     images: string[]
     fallbacks: string[]
+    ots?: string
   }
 }
 
@@ -142,6 +148,7 @@ export function buildVideoEvent(input: VideoEventInput): EventTemplate {
       ['size', video.size],
       ...video.images.map((u): [string, string] => ['image', u]),
       ...video.fallbacks.map((u): [string, string] => ['fallback', u]),
+      ['ots', video.ots],
     ]),
     ['duration', duration],
     ['t', input.hashtag],
