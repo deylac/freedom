@@ -37,7 +37,7 @@ ipfs add -r --cid-version=1 dist        # note le CID du dossier
 
 ## GitHub Pages
 
-Le workflow `.github/workflows/pages.yml` (déclenchement manuel) publie `dist/` sur GitHub Pages.
+Le workflow `.github/workflows/pages.yml` publie `dist/` sur GitHub Pages à chaque push sur `main` (ou à la demande depuis l'onglet Actions).
 Activer Pages dans *Settings → Pages → Source : GitHub Actions* au préalable.
 
 ## Service worker
