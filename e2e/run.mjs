@@ -607,6 +607,20 @@ await step('Voix robot : la hauteur de la voix d’origine disparaît, le rythme
   return `entrée ${Math.min(...r.f0in).toFixed(0)}→${Math.max(...r.f0in).toFixed(0)} Hz ; sortie à 110 ± 6 Hz sur ${(near * 100).toFixed(0)} % des fenêtres ; corrélation du rythme ${r.corr.toFixed(2)} ; niveau ${r.rmsIn.toFixed(3)}→${r.rmsOut.toFixed(3)}`
 })
 
+await step('Voix robot en capture réelle : enregistrement et publication avec la voix anonymisée', async () => {
+  const page = await newPage({ mobile: true, init: { ...settings, termsAcceptedVersion: 1 }, extra: { 'hw:e2e:maxMs': '3000' } })
+  await page.goto(`${APP}#voix`)
+  await page.getByRole('button', { name: /Filmer pour #voix/ }).click()
+  await page.waitForFunction(() => !document.querySelector('[data-testid=record]')?.hasAttribute('disabled'), null, { timeout: 10_000 })
+  await page.getByTestId('voice-toggle').click()
+  await page.getByTestId('record').click()
+  await page.getByTestId('review').waitFor({ timeout: 15_000 })
+  assert.match(await page.getByTestId('review').innerText(), /voix anonymisée/)
+  await page.getByTestId('review').waitFor({ state: 'detached', timeout: 15_000 })
+  await waitFor(() => v1Of('voix'), 30_000, 'publication #voix')
+  await page.context().close()
+})
+
 // ---------------------------------------------------------------------------
 // Suppression par l'auteur (NIP-09 + BUD-12)
 

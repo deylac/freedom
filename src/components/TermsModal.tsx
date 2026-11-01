@@ -24,7 +24,7 @@ export function TermsModal({ onAccept, onClose }: { onAccept: () => void; onClos
           </li>
           <li>
             <strong className="text-white">Pensez aux personnes filmées.</strong> Un visage reconnaissable peut les exposer.
-            Utilisez le filtre « Visages floutés » quand c’est possible.
+            Utilisez le filtre « Visages floutés » quand c’est possible, et « Voix robot » pour masquer votre voix.
           </li>
           <li>
             <strong className="text-white">Votre adresse IP</strong> reste visible des relais et serveurs média contactés.

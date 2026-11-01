@@ -14,6 +14,7 @@ import { baseMime, extFromMime } from '../blossom/urls'
 import { FaceTracker } from './face-tracker'
 import { blockFor, marginFor, padBox } from './faces'
 import { scrubVideoBlob, type ScrubReport } from './mp4-scrub'
+import { createRobotVoice } from './voice'
 
 export type FilterMode = 'none' | 'faces' | 'pixelate'
 export type Facing = 'environment' | 'user'
@@ -30,7 +31,11 @@ export interface Recording {
   poster: Blob | null
   scrub: ScrubReport
   stoppedBy: 'user' | 'limit' | 'interrupted'
+  /** Voix transformée par le vocodeur (non réversible). */
+  voice: VoiceMode
 }
+
+export type VoiceMode = 'natural' | 'robot'
 
 /** État du floutage des visages, pour l'interface. */
 export interface FaceStatus {
@@ -83,6 +88,8 @@ const AUDIO: MediaTrackConstraints = { echoCancellation: true, noiseSuppression:
 export class CaptureSession {
   facing: Facing = 'environment'
   filter: FilterMode = 'none'
+  voice: VoiceMode = 'natural'
+  private voiceProc: { track: MediaStreamTrack; close(): void } | null = null
   maxMs = MAX_CLIP_MS
 
   private camera: MediaStream | null = null
@@ -263,7 +270,20 @@ export class CaptureSession {
     const profile = QUALITY_PROFILES[this.quality]
     const canvasStream = this.canvas.captureStream(CAPTURE_FPS)
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()]
-    if (this.audioTrack) tracks.push(this.audioTrack)
+    const voice = this.voice
+    if (this.audioTrack) {
+      if (voice === 'robot') {
+        // Appelé depuis le clic (geste exigé par iOS pour Web Audio). Échec fermé : sans vocodeur,
+        // on refuse d'enregistrer plutôt que de garder la vraie voix.
+        try {
+          this.voiceProc = createRobotVoice(this.audioTrack)
+        } catch (err) {
+          canvasStream.getVideoTracks().forEach((t) => t.stop())
+          throw new CaptureError(`Voix anonymisée indisponible sur ce navigateur (${err instanceof Error ? err.message : err}) : enregistrement annulé.`, 'unknown')
+        }
+        tracks.push(this.voiceProc.track)
+      } else tracks.push(this.audioTrack)
+    }
     const recorder = new MediaRecorder(new MediaStream(tracks), {
       mimeType: this.mime,
       videoBitsPerSecond: profile.videoBitsPerSecond,
@@ -299,6 +319,8 @@ export class CaptureSession {
         this.timers.forEach(clearTimeout)
         this.timers = []
         canvasStream.getVideoTracks().forEach((t) => t.stop())
+        this.voiceProc?.close()
+        this.voiceProc = null
         const elapsed = Math.min(performance.now() - this.startedAt, this.maxMs)
         try {
           const poster = await (this.posterPromise ?? this.snapshotPoster())
@@ -319,6 +341,7 @@ export class CaptureSession {
             poster,
             scrub: report,
             stoppedBy: this.stopReason,
+            voice,
           })
         } catch (err) {
           reject(err)
@@ -355,6 +378,8 @@ export class CaptureSession {
     this.closed = true
     this.tracker?.close()
     this.tracker = null
+    this.voiceProc?.close()
+    this.voiceProc = null
     cancelAnimationFrame(this.raf)
     this.timers.forEach(clearTimeout)
     document.removeEventListener('visibilitychange', this.onVisibility)

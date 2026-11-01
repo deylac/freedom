@@ -6,7 +6,7 @@ import { detectCaptureSupport } from '../lib/media/mime'
 import { CaptureError, CaptureSession, type FaceStatus, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
-import { IconCheck, IconClose, IconFace, IconRetry, IconSwitch } from './icons'
+import { IconCheck, IconClose, IconFace, IconMic, IconRetry, IconSwitch } from './icons'
 import { Button, Toggle, useToast } from './ui'
 
 type Phase = 'starting' | 'ready' | 'recording' | 'processing' | 'review' | 'error'
@@ -63,6 +63,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   const [recording, setRecording] = useState<Recording | null>(null)
   const [filter, setFilter] = useState<FilterMode>('none')
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
+  const [voice, setVoice] = useState<'natural' | 'robot'>('natural')
   const [faceStatus, setFaceStatus] = useState<FaceStatus>({ state: 'off', trusted: false, count: 0 })
   const total = useMemo(maxDuration, [])
 
@@ -103,8 +104,15 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     const s = session.current
     if (!s || phase !== 'ready') return
     setElapsed(0)
+    let done: Promise<Recording>
+    try {
+      done = s.start()
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error')
+      return
+    }
     setPhase('recording')
-    s.start()
+    done
       .then((rec) => {
         setRecording(rec)
         setPhase('review')
@@ -131,6 +139,13 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     }, 250)
     return () => clearInterval(id)
   }, [filter])
+
+  const toggleVoice = () => {
+    const next = voice === 'robot' ? 'natural' : 'robot'
+    setVoice(next)
+    if (session.current) session.current.voice = next
+    if (next === 'robot') toast('Voix robot : hauteur et timbre effacés (non réversible). Les mots prononcés restent compréhensibles.', 'info')
+  }
 
   const cycleFilter = () => {
     const order: FilterMode[] = ['none', 'faces', 'pixelate']
@@ -201,6 +216,17 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
               <button onClick={cycleFilter} aria-label={`Filtre d'anonymisation : ${FILTER_LABEL[filter]}`} className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold ${filter === 'none' ? 'bg-black/40' : 'bg-accent text-night'}`} disabled={phase === 'starting' || phase === 'error'}>
                 <IconFace size={18} />
                 <span className="hidden sm:inline">{FILTER_LABEL[filter]}</span>
+              </button>
+              <button
+                onClick={toggleVoice}
+                aria-label={voice === 'robot' ? 'Voix robot (anonymisée) activée' : 'Activer la voix robot (anonymisée)'}
+                aria-pressed={voice === 'robot'}
+                className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold ${voice === 'robot' ? 'bg-accent text-night' : 'bg-black/40'}`}
+                disabled={phase !== 'ready' && phase !== 'starting'}
+                data-testid="voice-toggle"
+              >
+                <IconMic size={18} muted={voice === 'robot'} />
+                <span className="hidden sm:inline">{voice === 'robot' ? 'Voix robot' : 'Voix naturelle'}</span>
               </button>
               <button onClick={switchCamera} aria-label="Changer de caméra" className="rounded-full bg-black/40 p-2.5" disabled={phase === 'starting' || phase === 'error'}>
                 <IconSwitch />
@@ -327,6 +353,7 @@ function Review({
           <span>{recording.mime}</span>
           <span className="text-ok">✓ aucune métadonnée GPS / appareil</span>
           {recording.scrub.datesCleared > 0 && <span className="text-ok">✓ dates internes effacées</span>}
+          {recording.voice === 'robot' && <span className="text-ok">✓ voix anonymisée</span>}
         </div>
         {tooBig && <p className="text-xs text-rec">Fichier de {formatBytes(recording.size)} : certains serveurs gratuits (limite 20 Mio) le refuseront. Le mode « réseau saturé » des réglages réduit la taille.</p>}
         <input

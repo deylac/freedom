@@ -152,3 +152,11 @@ export const IconBack = (p: IconProps) => (
     <path d="m15 18-6-6 6-6" />
   </svg>
 )
+
+export const IconMic = ({ muted, ...p }: IconProps & { muted?: boolean }) => (
+  <svg {...base(p)}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8" />
+    {muted && <path d="M3 3l18 18" />}
+  </svg>
+)
