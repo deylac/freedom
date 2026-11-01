@@ -419,7 +419,10 @@ await step('Signalement : kind 1984 (e, p, x) + PUT /report, vidéo masquée', a
   assert.match(report.id, /^00000/, `preuve de travail insuffisante : ${report.id.slice(0, 8)}`)
   assert.ok(tagOf(report, 'nonce'), 'tag nonce absent')
   assert.ok(tagOf(report, 'a'), 'tag a absent')
-  const servers = [A, B, C].filter((s) => s.reports.length > 0).length
+  // PUT /report part après la publication sur les relais : on l'attend (course constatée en CI).
+  const servers = await waitFor(() => [A, B, C].filter((s) => s.reports.length > 0).length === 3 && 3, 10_000, 'PUT /report sur les 3 serveurs').catch(
+    () => [A, B, C].filter((s) => s.reports.length > 0).length,
+  )
   assert.equal(servers, 3, `PUT /report reçu par ${servers}/3 serveurs`)
 })
 
