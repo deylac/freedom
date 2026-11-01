@@ -5,7 +5,7 @@ import { verifyEvent } from 'nostr-tools/pure'
 
 const EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'image/jpeg': 'jpg' }
 
-export function startBlossom(port, { mirror = true, refuseUploads = false } = {}) {
+export function startBlossom(port, { mirror = true, refuseUploads = false, delayMs = 0 } = {}) {
   const base = `http://127.0.0.1:${port}`
   const blobs = new Map()
   const log = []
@@ -87,6 +87,8 @@ export function startBlossom(port, { mirror = true, refuseUploads = false } = {}
       if (typeof auth === 'string') return deny(401, auth)
       if (req.headers['x-sha-256'] && req.headers['x-sha-256'] !== sha) return deny(409, 'hash mismatch')
       const existed = blobs.has(sha)
+      // Serveur lent (antivirus) : la réponse arrive longtemps après la réception complète du fichier.
+      if (delayMs && (req.headers['content-type'] ?? '').startsWith('video/')) await new Promise((r) => setTimeout(r, delayMs))
       blobs.set(sha, { data, type: (req.headers['content-type'] ?? 'application/octet-stream').split(';')[0] })
       return send(existed ? 200 : 201, JSON.stringify(descriptor(sha)), { 'Content-Type': 'application/json' })
     }
@@ -107,6 +109,7 @@ export function startBlossom(port, { mirror = true, refuseUploads = false } = {}
       const auth = checkAuth(req, 'upload', sha)
       entry.auth = auth
       if (typeof auth === 'string') return deny(typeof auth === 'string' && auth.includes('x tag') ? 409 : 401, auth)
+      if (delayMs && (upstream.headers.get('content-type') ?? '').startsWith('video/')) await new Promise((r) => setTimeout(r, delayMs))
       blobs.set(sha, { data, type: (upstream.headers.get('content-type') ?? 'application/octet-stream').split(';')[0] })
       return send(201, JSON.stringify(descriptor(sha)), { 'Content-Type': 'application/json' })
     }

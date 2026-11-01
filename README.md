@@ -62,7 +62,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 3. Jeton BUD-11 unique (`t=upload`, `x` = vidéo + vignette, `server` = serveurs visés, expiration 1 h).
 4. `HEAD /upload` puis `PUT /upload` sur le premier serveur qui accepte ; hash renvoyé vérifié strictement.
 5. Événement `kind 34236` (v1) publié dès le **premier** accusé de relais → la vidéo apparaît sur tous les murs.
-6. `PUT /mirror` vers 2 autres serveurs (repli : envoi direct si `/mirror` n'existe pas).
+6. En arrière-plan (sans bloquer les clips suivants) : `PUT /mirror` en parallèle vers les autres serveurs, puis envoi direct si `/mirror` n'existe pas ; les serveurs muets sont mis de côté 30 min.
 7. Événement v2 **avec le même tag `d`** contenant les `fallback` : il remplace la v1.
 8. Liste de serveurs `kind 10063` publiée pour l'identité (BUD-03).
 
@@ -82,7 +82,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 ## Critères d'acceptation (§8)
 
 `npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et trois
-serveurs Blossom de test (l'un sans `/mirror`, l'autre qui refuse les clés inconnues). Dernier résultat : **16/16**, y compris avec la
+serveurs Blossom de test (sans `/mirror`, refusant les clés inconnues, ou répondant 35 s après réception). Dernier résultat : **18/18**, y compris avec la
 vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
 
 | Test du PRD | Vérification automatisée |
@@ -94,6 +94,8 @@ vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
 | Résistance à la censure | primaire bloqué → lecture depuis un miroir en 0,3 s ; primaire en « trou noir » → 7,2 s |
 | Signalement | kind 1984 avec `e`, `p`, `x` (+ `a`) sur les relais, `PUT /report` sur les 3 serveurs, vidéo masquée |
 | *Ajout* autoplay refusé | lecture automatique bloquée (iPhone en économie d'énergie) : bouton « Lire », aucune fausse bascule |
+| *Ajout* serveur lent | réponse 35 s après réception (antivirus) : envoi conservé, pas d'abandon |
+| *Ajout* deux voies | un nouveau clip est publié pendant que le précédent se réplique |
 | *Ajout* diagnostic | refus d'un serveur et repli visibles dans Réglages → « Diagnostic du dernier envoi » |
 | *Bonus* suppression | kind 5 + `DELETE` sur les serveurs, vidéo retirée des murs ouverts |
 

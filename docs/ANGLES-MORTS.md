@@ -74,12 +74,33 @@ Légende : ✅ traité dans le code · ⚠️ atténué, limite résiduelle · �
 
 ## 6. Ce qui n'a PAS pu être vérifié ici
 
-> **Premier test réel (iPhone, 5G, 1ᵉʳ nov. 2026)** : 6/6 relais connectés, publication et signature
-> vérifiées sur les 6 relais. `blossom.nostr.build` et `blossom.primal.net` ont refusé l'envoi ;
-> `nostr.download` est devenu primaire. Le détail des refus est désormais affiché (Réglages →
-> « Diagnostic du dernier envoi ») pour ajuster la liste par défaut.
+> **Tests réels (iPhone, 5G, 1ᵉʳ nov. 2026) + sonde GitHub Actions** (`scripts/probe-servers.mjs`,
+> lancée chaque lundi) : 6/6 relais connectés et à jour. Côté Blossom :
+>
+> | Serveur | Clé inconnue | Constat |
+> |---|---|---|
+> | nostr.download | ✅ | rapide, CORS complet, plages d'octets → **primaire par défaut** |
+> | cdn.nostrcheck.me | ✅ | CORS complet |
+> | blossom.nostr.build, blossom.band | ✅ | antivirus : réponse > 30 s après réception |
+> | blossom.primal.net | ✅ au HEAD | réponses d'erreur sans en-têtes CORS (illisibles par le navigateur) |
+> | blosstr.com | ❌ 403 | « No active subscription » : payant, retiré |
+> | 24242.io, cdn.satellite.earth, files.sovbit.host | ❌ | refus ou CORS incompatible |
+>
+> Trois défauts découverts et corrigés grâce à ces tests (chacun couvert par un test de bout en
+> bout qui échoue sur l'ancien code) :
+> 1. **Autoplay refusé pris pour une panne** (mode économie d'énergie d'iOS) — voir §5.6.
+> 2. **Envoi abandonné sur un serveur lent** : le détecteur de blocage attendait des octets alors que
+>    le fichier était déjà parti et que le serveur l'analysait. Le délai de blocage ne s'applique plus
+>    qu'à la transmission ; l'attente de réponse a son propre délai (120 s).
+> 3. **Nouveaux clips bloqués derrière la réplication des anciens** : la file était unique et la
+>    réplication séquentielle (jusqu'à plusieurs minutes). Désormais deux voies indépendantes
+>    (publication urgente / réplication en arrière-plan), `/mirror` en parallèle sur tous les serveurs,
+>    serveurs muets mis de côté 30 min, vignette jamais bloquante.
+>
+> Autre piège corrigé : l'ancienne liste de serveurs par défaut était **figée dans le stockage local**
+> des utilisateurs ; seuls les réglages réellement modifiés sont désormais enregistrés.
 
-- **Relais et serveurs Blossom réels** : la politique réseau du conteneur de développement bloque `relay.damus.io`, `nos.lol`, `blossom.nostr.build`, etc. Tout le pipeline a été validé contre un relais et trois serveurs Blossom **simulés** conformes aux spécifications (`e2e/`). **Avant production**, vérifier pour chaque serveur par défaut : accepte-t-il des clés inconnues sans paiement ? limite de taille ? CORS sur `HEAD /upload` ? `/mirror` ? `/report` ? Domaines cités dans le PRD dont l'URL exacte reste à confirmer : `blosstr.com` (présenté comme payant par sa propre page), `azzamo.media` (non retenu par défaut).
+- **Relais et serveurs Blossom réels** : le conteneur de développement ne peut pas les joindre ; ils sont vérifiés par la sonde GitHub Actions et par des tests sur téléphone (ci-dessus). Restent à vérifier : `/report` (BUD-09) et la conservation dans le temps (en-tête `Sunset`).
 - **Vrais téléphones** : tests réalisés dans Chromium (caméra simulée) uniquement. Safari iOS (captureStream + MediaRecorder MP4) et Chrome Android doivent être testés sur appareil.
 - **exiftool** indisponible : le test forensique inspecte le binaire (absence de `©xyz`, `GPS`, `Make`, `Model`, `udta`…, dates MP4 à zéro). Refaire le test n°3 du PRD avec exiftool sur un fichier issu d'un iPhone.
 

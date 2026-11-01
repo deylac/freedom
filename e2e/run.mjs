@@ -36,7 +36,8 @@ const relay = startRelay(7777)
 const A = await startBlossom(3001)
 const B = await startBlossom(3002)
 const C = await startBlossom(3003, { mirror: false }) // pas de BUD-04 → repli envoi direct
-const D = await startBlossom(3004, { refuseUploads: true }) // refuse toute clé inconnue (cas réel nostr.build)
+const D = await startBlossom(3004, { refuseUploads: true }) // refuse toute clé inconnue
+const E = await startBlossom(3005, { delayMs: 35_000 }) // antivirus lent : répond 35 s après réception (cas réel nostr.build)
 
 const settings = {
   relays: [relay.url],
@@ -87,6 +88,27 @@ async function newPage({ mobile = false, init = settings, extra = {} } = {}) {
 }
 
 const videoEvents = () => relay.received.filter((e) => e.kind === 34236)
+
+async function waitFor(predicate, timeoutMs, label) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeoutMs) {
+    const value = predicate()
+    if (value) return value
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  throw new Error(`délai dépassé : ${label}`)
+}
+
+/** Filme un clip (limite raccourcie) et laisse la publication automatique partir. */
+async function recordClip(page, tag) {
+  await page.getByRole('button', { name: new RegExp(`Filmer pour #${tag}`) }).click()
+  await page.waitForFunction(() => !document.querySelector('[data-testid=record]')?.hasAttribute('disabled'), null, { timeout: 10_000 })
+  await page.getByTestId('record').click()
+  await page.getByTestId('review').waitFor({ timeout: 15_000 })
+  await page.getByTestId('review').waitFor({ state: 'detached', timeout: 15_000 })
+}
+
+const v1Of = (tag, n = 0) => videoEvents().filter((e) => tagOf(e, 't')?.[1] === tag && !imeta(e).fallback)[n]
 const tagOf = (e, n) => e.tags.find((t) => t[0] === n)
 const imeta = (e) => {
   const out = {}
@@ -325,6 +347,43 @@ await step('Routage : passage à #15octobre sans requête au serveur web', async
 })
 
 // ---------------------------------------------------------------------------
+// Serveurs lents (constaté en réel avec nostr.build : antivirus après réception)
+
+await step('Serveur primaire lent (réponse 35 s après réception) : envoi accepté, pas d’abandon', async () => {
+  const page = await newPage({
+    mobile: true,
+    init: { ...settings, blossomServers: [E.base, A.base], termsAcceptedVersion: 1 },
+    extra: { 'hw:e2e:maxMs': '3000' },
+  })
+  await page.goto(`${APP}#lent`)
+  await recordClip(page, 'lent')
+  const v1 = await waitFor(() => v1Of('lent'), 60_000, 'v1 #lent')
+  assert.match(imeta(v1).url[0], /127\.0\.0\.1:3005/, 'le serveur lent aurait dû rester primaire')
+  await page.context().close()
+})
+
+await step('Deux voies : un nouveau clip n’attend pas la réplication du précédent', async () => {
+  const page = await newPage({
+    mobile: true,
+    init: { ...settings, blossomServers: [A.base, E.base], termsAcceptedVersion: 1 },
+    extra: { 'hw:e2e:maxMs': '3000' },
+  })
+  await page.goto(`${APP}#voies`)
+  await recordClip(page, 'voies')
+  const x = await waitFor(() => v1Of('voies', 0), 30_000, 'v1 du clip X')
+  // X se réplique vers le serveur lent (35 s) pendant qu'on filme Y.
+  await recordClip(page, 'voies')
+  const y = await waitFor(() => v1Of('voies', 1), 30_000, 'v1 du clip Y')
+  const xd = tagOf(x, 'd')[1]
+  const xv2 = () => videoEvents().find((e) => tagOf(e, 'd')[1] === xd && imeta(e).fallback)
+  assert.ok(!xv2() || relay.received.indexOf(y) < relay.received.indexOf(xv2()), 'Y a attendu la réplication de X')
+  const v2 = await waitFor(xv2, 90_000, 'v2 de X avec miroir lent')
+  assert.ok(imeta(v2).fallback.some((u) => u.includes(':3005/')), 'miroir lent absent des fallback')
+  await page.context().close()
+  return `Y publiée ${((relay.received.indexOf(v2) - relay.received.indexOf(y)) > 0 ? 'avant' : 'après')} la fin de la réplication de X`
+})
+
+// ---------------------------------------------------------------------------
 // Suppression par l'auteur (NIP-09 + BUD-12)
 
 await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', async () => {
@@ -345,7 +404,7 @@ await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', 
 // ---------------------------------------------------------------------------
 
 await browser.close()
-await Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), new Promise((r) => web.close(r))])
+await Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), E.close(), new Promise((r) => web.close(r))])
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length}/${results.length} tests réussis${mimeUsed ? ` — format enregistré par Chromium : ${mimeUsed}` : ''}\n`)
 process.exit(failed.length ? 1 : 0)

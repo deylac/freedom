@@ -1,5 +1,6 @@
 import {
   DEFAULT_BLOSSOM_SERVERS,
+  LEGACY_DEFAULT_BLOSSOM_SERVERS,
   DEFAULT_MODERATORS,
   DEFAULT_RELAYS,
   DEFAULT_REPORT_THRESHOLD,
@@ -43,7 +44,29 @@ export const DEFAULT_SETTINGS: Settings = {
 const KEY = 'settings'
 type Listener = () => void
 
-let current: Settings = { ...DEFAULT_SETTINGS, ...readJSON<Partial<Settings>>(KEY, {}) }
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * Seules les valeurs choisies par l'utilisateur sont enregistrées : sinon une liste par défaut
+ * figée dans le stockage local empêcherait toute mise à jour de l'application de la corriger
+ * (cas réel : un serveur devenu payant resté en tête de liste).
+ */
+export function loadOverrides(stored: Partial<Settings>): Partial<Settings> {
+  const out: Partial<Settings> = { ...stored }
+  if (out.blossomServers && LEGACY_DEFAULT_BLOSSOM_SERVERS.some((legacy) => same(legacy, out.blossomServers))) {
+    delete out.blossomServers
+  }
+  for (const key of Object.keys(out) as (keyof Settings)[]) {
+    if (same(out[key], DEFAULT_SETTINGS[key])) delete out[key]
+  }
+  return out
+}
+
+function persist(settings: Settings) {
+  writeJSON(KEY, loadOverrides(settings))
+}
+
+let current: Settings = { ...DEFAULT_SETTINGS, ...loadOverrides(readJSON<Partial<Settings>>(KEY, {})) }
 const listeners = new Set<Listener>()
 
 export function getSettings(): Settings {
@@ -52,13 +75,13 @@ export function getSettings(): Settings {
 
 export function updateSettings(patch: Partial<Settings>): void {
   current = { ...current, ...patch }
-  writeJSON(KEY, current)
+  persist(current)
   listeners.forEach((l) => l())
 }
 
 export function resetSettings(): void {
   current = { ...DEFAULT_SETTINGS }
-  writeJSON(KEY, current)
+  persist(current)
   listeners.forEach((l) => l())
 }
 

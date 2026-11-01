@@ -24,6 +24,7 @@ import {
   uploadBlob,
   type BlobDescriptor,
 } from './blossom/client'
+import { markHealthy, orderByHealth, penalize, penaltyOf } from './blossom/health'
 import { hostOf, normalizeServer } from './blossom/urls'
 import { sha256Hex } from './media/hash'
 import type { Recording } from './media/recorder'
@@ -149,7 +150,7 @@ export function describeError(err: unknown): string {
       case 'timeout':
         return `pas de réponse (délai dépassé)${reason}`
       case 'network':
-        return 'connexion impossible ou bloquée par CORS'
+        return 'réponse illisible (en-têtes CORS absents) ou connexion impossible'
       case 'mismatch':
         return `le serveur a modifié le fichier${reason}`
       case 'aborted':
@@ -188,6 +189,7 @@ async function uploadPrimary(
     } catch (err) {
       if (err instanceof BlossomError && err.kind === 'aborted') throw err
       if (err instanceof BlossomError && err.kind === 'timeout') {
+        penalize(server, `pré-vérification : ${describeError(err)}`)
         diag(job, server, 'envoi', false, `pré-vérification : ${describeError(err)}`)
         continue
       }
@@ -204,10 +206,16 @@ async function uploadPrimary(
         onProgress: (sent, total) =>
           onProgress({ stage: 'uploading', message: `Envoi vers ${hostOf(server)}`, sent, total }),
       })
-      diag(job, server, 'envoi', true, preflightUnknown ? 'accepté (pré-vérification impossible)' : 'accepté — serveur primaire')
+      markHealthy(server)
+      const notes = [preflightUnknown && 'pré-vérification impossible', descriptor.minimalHeaders && 'sans X-SHA-256 : CORS incomplet']
+        .filter(Boolean)
+        .join(', ')
+      diag(job, server, 'envoi', true, `accepté — serveur primaire${notes ? ` (${notes})` : ''}`)
       return { server, descriptor }
     } catch (err) {
       if (err instanceof BlossomError && err.kind === 'aborted') throw err
+      // Serveur muet ou injoignable : mis de côté 30 min pour ne pas retarder les prochains clips.
+      if (err instanceof BlossomError && (err.kind === 'timeout' || err.kind === 'network')) penalize(server, describeError(err))
       diag(job, server, 'envoi', false, `${describeError(err)}${preflightUnknown ? ' (pré-vérification impossible)' : ''}`)
     }
   }
@@ -215,11 +223,28 @@ async function uploadPrimary(
   throw new Error(`Aucun serveur Blossom n'a accepté la vidéo.\n${lines.join('\n')}`)
 }
 
-async function uploadPoster(job: OutboxJob, targets: string[], token: Awaited<ReturnType<typeof createAuthToken>>, signal: AbortSignal) {
+/**
+ * Vignette : facultative. Sur la voie urgente on lui accorde un délai court (un serveur lent ne
+ * doit pas retarder l'apparition de la vidéo) ; sinon elle est rattrapée par la voie de réplication.
+ */
+async function uploadPoster(
+  job: OutboxJob,
+  targets: string[],
+  token: Awaited<ReturnType<typeof createAuthToken>>,
+  signal: AbortSignal,
+  responseTimeoutMs: number,
+) {
   if (!job.poster || !job.posterBlob) return undefined
   for (const server of targets) {
     try {
-      const d = await uploadBlob(server, job.posterBlob, { sha256: job.poster.sha256, type: job.poster.mime, token, signal, stallTimeoutMs: 15_000 })
+      const d = await uploadBlob(server, job.posterBlob, {
+        sha256: job.poster.sha256,
+        type: job.poster.mime,
+        token,
+        signal,
+        stallTimeoutMs: 15_000,
+        responseTimeoutMs,
+      })
       return d.url
     } catch (err) {
       if (err instanceof BlossomError && err.kind === 'aborted') throw err
@@ -229,34 +254,6 @@ async function uploadPoster(job: OutboxJob, targets: string[], token: Awaited<Re
 }
 
 const MIRROR_UNSUPPORTED = new Set([404, 405, 501, 502])
-
-/** Réplique un blob : /mirror d'abord (pas de bande montante consommée), envoi direct en repli. */
-async function replicate(
-  server: string,
-  sourceUrl: string,
-  info: { sha256: string; mime: string; size: number },
-  blob: Blob | undefined,
-  token: Awaited<ReturnType<typeof createAuthToken>>,
-  signal: AbortSignal,
-): Promise<{ url: string; via: 'mirror' | 'upload' }> {
-  try {
-    const d = await mirrorBlob(server, sourceUrl, { sha256: info.sha256, type: info.mime, size: info.size, token, signal })
-    return { url: d.url, via: 'mirror' }
-  } catch (err) {
-    if (!(err instanceof BlossomError) || err.kind === 'aborted' || err.kind === 'mismatch') throw err
-    const fallbackOk = err.kind === 'network' || err.kind === 'timeout' || MIRROR_UNSUPPORTED.has(err.status)
-    if (!blob || !fallbackOk) throw new Error(`/mirror : ${describeError(err)}`)
-    try {
-      const pre = await preflightUpload(server, { sha256: info.sha256, size: info.size, type: info.mime }, token, { signal }).catch(() => ({ ok: true }) as const)
-      if (!pre.ok) throw new BlossomError(server, 'rejected', pre.status, pre.reason)
-      const d = await uploadBlob(server, blob, { sha256: info.sha256, type: info.mime, token, signal })
-      return { url: d.url, via: 'upload' }
-    } catch (err2) {
-      if (err2 instanceof BlossomError && err2.kind === 'aborted') throw err2
-      throw new Error(`/mirror : ${describeError(err)} ; envoi direct : ${describeError(err2)}`)
-    }
-  }
-}
 
 function buildEvent(job: OutboxJob, createdAt: number) {
   const seconds = Math.round(job.video.duration)
@@ -316,37 +313,49 @@ async function publishServerList(signer: Signer, hosting: string[]) {
   await first.then(() => markServerListPublished(signer.pubkey, merged)).catch(() => {})
 }
 
-export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<OutboxJob> {
-  const settings = getSettings()
+interface JobContext {
+  signer: Signer
+  token: Awaited<ReturnType<typeof createAuthToken>>
+  targets: string[]
+}
+
+async function prepare(job: OutboxJob): Promise<JobContext> {
   const targets = servers()
   if (targets.length === 0) throw new Error('Aucun serveur Blossom configuré')
   if (job.video.size > MAX_UPLOAD_BYTES * 5) throw new Error('Fichier trop volumineux')
-  job.attempts++
-  // Un nouvel essai refait les étapes non terminées : on ne garde que le diagnostic des étapes acquises.
-  job.diagnostics = job.primary ? (job.diagnostics ?? []).filter((d) => d.step === 'envoi') : []
   const signer = await signerForJob(job)
   const blobs = [job.video.sha256, ...(job.poster ? [job.poster.sha256] : [])]
   const token = await createAuthToken(signer, 'upload', { sha256: blobs, servers: targets })
+  return { signer, token, targets }
+}
 
-  // 3. Envoi primaire
+/**
+ * Voie 1 — urgente : envoi principal + publication v1. Une vidéo est visible sur le mur dès la
+ * fin de cette étape ; elle n'attend jamais la réplication d'une autre vidéo.
+ */
+export async function runPublishPhase(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<void> {
+  job.attempts++
+  if (!job.primary) job.diagnostics = []
+  const { signer, token, targets } = await prepare(job)
+
   if (!job.primary) {
-    const { server, descriptor } = await uploadPrimary(job, targets, token, onProgress, signal)
+    // Serveurs sains d'abord ; ceux qui ont récemment expiré ne sont essayés qu'en dernier recours.
+    const { healthy, penalized } = orderByHealth(targets)
+    const { server, descriptor } = await uploadPrimary(job, [...healthy, ...penalized], token, onProgress, signal)
     job.primary = { server, url: descriptor.url }
     job.servers = [server]
-    job.posterUrl = await uploadPoster(job, [server, ...targets.filter((s) => s !== server)], token, signal)
+    job.posterUrl = await uploadPoster(job, [server], token, signal, 8_000)
     job.state = 'uploaded'
     job.timings.uploadedAt = Date.now()
     await putJob(job)
   }
 
-  // 4. Publication v1 dès le premier accusé de relais
   if (!job.eventId) {
     onProgress({ stage: 'publishing', message: 'Publication sur les relais Nostr…' })
     const createdAt = nowSeconds()
     job.publishedAt ??= createdAt
     const event = await signer.sign(buildEvent(job, createdAt))
-    const { first } = publishEvent(settings.relays, event, signer)
-    await first
+    await publishEvent(getSettings().relays, event, signer).first
     job.eventId = event.id
     job.eventCreatedAt = event.created_at
     job.state = 'published'
@@ -354,38 +363,107 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
     await putJob(job)
     rememberClip(job)
   }
+}
 
-  // 5. Miroirs
-  onProgress({ stage: 'mirroring', message: 'Réplication sur des serveurs miroirs…' })
+const MAX_FALLBACKS = 4
+
+/**
+ * Voie 2 — en arrière-plan : réplication.
+ *  1. PUT /mirror vers tous les serveurs restants EN PARALLÈLE (copie serveur à serveur :
+ *     aucune bande montante consommée, et l'attente est celle du plus lent, pas la somme).
+ *  2. Si moins de MIRROR_TARGET copies : envoi direct du fichier local, un serveur à la fois
+ *     (bande montante), seulement là où /mirror est absent ou a échoué côté réseau.
+ *  3. Publication v2 (même tag d) avec les `fallback`, puis liste kind 10063.
+ */
+export async function runMirrorPhase(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<void> {
+  const { signer, token, targets } = await prepare(job)
+  job.diagnostics = (job.diagnostics ?? []).filter((d) => d.step === 'envoi')
   const primary = job.primary!
-  for (const server of targets) {
-    if (job.mirrors.length >= MIRROR_TARGET) break
-    if (job.servers.includes(server)) continue
-    try {
-      onProgress({ stage: 'mirroring', message: `Réplication vers ${hostOf(server)}…` })
-      const { url, via } = await replicate(server, primary.url, job.video, job.videoBlob, token, signal)
-      job.mirrors.push(url)
-      job.servers.push(server)
-      diag(job, server, 'miroir', true, via === 'mirror' ? 'répliqué via /mirror' : 'répliqué par envoi direct (/mirror indisponible)')
-      if (job.posterUrl && job.poster) {
-        const poster = await replicate(server, job.posterUrl, job.poster, job.posterBlob, token, signal).catch(() => undefined)
-        if (poster) job.posterMirrors.push(poster.url)
+  const remaining = targets.filter((s) => !job.servers.includes(s))
+  const { healthy, penalized } = orderByHealth(remaining)
+  for (const server of penalized) diag(job, server, 'miroir', false, `ignoré pendant 30 min : ${penaltyOf(server)}`)
+
+  onProgress({ stage: 'mirroring', message: `Réplication vers ${healthy.length} serveur${healthy.length > 1 ? 's' : ''}…` })
+  const attempts = await Promise.all(
+    healthy.map(async (server) => {
+      try {
+        const d = await mirrorBlob(server, primary.url, { sha256: job.video.sha256, type: job.video.mime, size: job.video.size, token, signal })
+        markHealthy(server)
+        return { server, url: d.url, note: d.minimalHeaders ? ' (sans X-SHA-256 : CORS incomplet)' : '' }
+      } catch (err) {
+        if (err instanceof BlossomError && err.kind === 'aborted') throw err
+        return { server, err }
       }
-      await putJob(job)
-    } catch (err) {
-      if (err instanceof BlossomError && err.kind === 'aborted') throw err
-      diag(job, server, 'miroir', false, err instanceof Error ? err.message : String(err))
+    }),
+  )
+
+  const fallbackCandidates: { server: string; err: unknown }[] = []
+  for (const a of attempts) {
+    if ('url' in a && a.url) {
+      if (job.mirrors.length < MAX_FALLBACKS) {
+        job.mirrors.push(a.url)
+        job.servers.push(a.server)
+      }
+      diag(job, a.server, 'miroir', true, `répliqué via /mirror${a.note}`)
+    } else if ('err' in a) {
+      const err = a.err
+      const retryable =
+        err instanceof BlossomError && (err.kind === 'network' || err.kind === 'timeout' || MIRROR_UNSUPPORTED.has(err.status))
+      if (retryable && job.videoBlob) fallbackCandidates.push({ server: a.server, err })
+      else diag(job, a.server, 'miroir', false, `/mirror : ${describeError(err)}`)
     }
+  }
+  await putJob(job)
+
+  for (const { server, err } of fallbackCandidates) {
+    if (job.mirrors.length >= MIRROR_TARGET) {
+      diag(job, server, 'miroir', false, `/mirror : ${describeError(err)} (envoi direct inutile : assez de copies)`)
+      continue
+    }
+    onProgress({ stage: 'mirroring', message: `Envoi direct vers ${hostOf(server)}…` })
+    try {
+      const pre = await preflightUpload(server, { sha256: job.video.sha256, size: job.video.size, type: job.video.mime }, token, { signal }).catch(() => ({ ok: true }) as const)
+      if (!pre.ok) throw new BlossomError(server, 'rejected', pre.status, pre.reason)
+      const d = await uploadBlob(server, job.videoBlob!, { sha256: job.video.sha256, type: job.video.mime, token, signal })
+      job.mirrors.push(d.url)
+      job.servers.push(server)
+      markHealthy(server)
+      diag(job, server, 'miroir', true, `répliqué par envoi direct (/mirror : ${describeError(err)})`)
+      await putJob(job)
+    } catch (err2) {
+      if (err2 instanceof BlossomError && err2.kind === 'aborted') throw err2
+      if (err2 instanceof BlossomError && (err2.kind === 'timeout' || err2.kind === 'network')) penalize(server, describeError(err2))
+      diag(job, server, 'miroir', false, `/mirror : ${describeError(err)} ; envoi direct : ${describeError(err2)}`)
+    }
+  }
+
+  // Vignette non envoyée sur la voie urgente (serveur lent) : rattrapage ici, sans délai serré.
+  if (!job.posterUrl && job.poster && job.posterBlob) {
+    job.posterUrl = await uploadPoster(job, job.servers, token, signal, 120_000)
+  }
+  // Vignette : copie best-effort sur les serveurs qui détiennent la vidéo.
+  if (job.posterUrl && job.poster) {
+    const posterInfo = job.poster
+    const posterUrl = job.posterUrl
+    const copies = await Promise.all(
+      job.servers
+        .filter((s) => !posterUrl.startsWith(s) && !job.posterMirrors.some((u) => u.startsWith(s)))
+        .map((server) =>
+          mirrorBlob(server, posterUrl, { sha256: posterInfo.sha256, type: posterInfo.mime, size: posterInfo.size, token, signal, timeoutMs: 60_000 })
+            .then((d) => d.url)
+            .catch(() => undefined),
+        ),
+    )
+    for (const url of copies) if (url) job.posterMirrors.push(url)
   }
   job.timings.mirroredAt = Date.now()
 
-  // 6. v2 avec les fallback (même adresse : remplacement, pas doublon)
   if (job.mirrors.length > 0) {
     onProgress({ stage: 'publishing', message: 'Ajout des miroirs à la publication…' })
     const createdAt = Math.max(nowSeconds(), (job.eventCreatedAt ?? 0) + 1)
     const event = await signer.sign(buildEvent(job, createdAt))
     try {
-      await publishEvent(settings.relays, event, signer).first
+      await publishEvent(getSettings().relays, event, signer).first
       job.eventId = event.id
       job.eventCreatedAt = event.created_at
       rememberClip(job)
@@ -394,7 +472,6 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
     }
   }
 
-  // 7. Liste de serveurs de l'identité
   await publishServerList(signer, job.servers)
   saveLastDiagnostics({ at: Date.now(), tag: job.tag, items: job.diagnostics ?? [] })
 
@@ -404,11 +481,17 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
   job.posterBlob = undefined
   await deleteJob(job.id)
   onProgress({ stage: 'done', message: 'Publiée' })
+}
+
+/** Les deux voies à la suite (utilisé par les tests). */
+export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<OutboxJob> {
+  await runPublishPhase(job, onProgress, signal)
+  await runMirrorPhase(job, onProgress, signal)
   return job
 }
 
 // ---------------------------------------------------------------------------
-// File de publication (une seule tâche à la fois, reprise automatique)
+// File de publication : deux voies indépendantes, reprise automatique
 
 export interface JobView {
   id: string
@@ -423,13 +506,14 @@ export interface JobView {
 }
 
 type Listener = () => void
+type Lane = 'publish' | 'mirror'
 
 class Publisher {
   private jobs = new Map<string, OutboxJob>()
   private progress = new Map<string, Progress>()
   private errors = new Map<string, string>()
-  private queue: string[] = []
-  private active: { id: string; controller: AbortController } | null = null
+  private queues: Record<Lane, string[]> = { publish: [], mirror: [] }
+  private active: Record<Lane, { id: string; controller: AbortController } | null> = { publish: null, mirror: null }
   private listeners = new Set<Listener>()
   private snapshot: JobView[] = []
   private recent: JobView[] = []
@@ -446,7 +530,9 @@ class Publisher {
       id: j.id,
       tag: j.tag,
       state: j.state,
-      progress: this.progress.get(j.id) ?? { stage: 'queued', message: 'En attente' },
+      progress:
+        this.progress.get(j.id) ??
+        (j.state === 'published' ? { stage: 'mirroring', message: 'Réplication en attente' } : { stage: 'queued', message: 'En attente d’envoi' }),
       error: this.errors.get(j.id),
       createdAt: j.createdAt,
       timings: j.timings,
@@ -457,12 +543,18 @@ class Publisher {
     this.listeners.forEach((l) => l())
   }
 
+  private laneFor(job: OutboxJob): Lane {
+    return job.eventId ? 'mirror' : 'publish'
+  }
+
   enqueue(job: OutboxJob) {
     this.jobs.set(job.id, job)
     this.errors.delete(job.id)
-    if (!this.queue.includes(job.id) && this.active?.id !== job.id) this.queue.push(job.id)
+    this.progress.delete(job.id)
+    const lane = this.laneFor(job)
+    if (!this.queues[lane].includes(job.id) && this.active[lane]?.id !== job.id) this.queues[lane].push(job.id)
     this.emit()
-    void this.pump()
+    void this.pump(lane)
   }
 
   async resumeAll() {
@@ -475,8 +567,10 @@ class Publisher {
   }
 
   async cancel(id: string) {
-    if (this.active?.id === id) this.active.controller.abort()
-    this.queue = this.queue.filter((q) => q !== id)
+    for (const lane of ['publish', 'mirror'] as Lane[]) {
+      if (this.active[lane]?.id === id) this.active[lane]!.controller.abort()
+      this.queues[lane] = this.queues[lane].filter((q) => q !== id)
+    }
     this.jobs.delete(id)
     this.progress.delete(id)
     await deleteJob(id)
@@ -488,31 +582,39 @@ class Publisher {
     this.emit()
   }
 
-  private async pump(): Promise<void> {
-    if (this.active) return
-    const id = this.queue.shift()
+  private async pump(lane: Lane): Promise<void> {
+    if (this.active[lane]) return
+    const id = this.queues[lane].shift()
     if (!id) return
     const job = this.jobs.get(id)
-    if (!job) return this.pump()
+    if (!job) return this.pump(lane)
     const controller = new AbortController()
-    this.active = { id, controller }
+    this.active[lane] = { id, controller }
+    const onProgress = (p: Progress) => {
+      this.progress.set(id, p)
+      this.emit()
+    }
     try {
-      await runJob(job, (p) => {
-        this.progress.set(id, p)
-        this.emit()
-      }, controller.signal)
-      const finished: JobView = {
-        id,
-        tag: job.tag,
-        state: 'done',
-        progress: { stage: 'done', message: 'Publiée' },
-        createdAt: job.createdAt,
-        timings: job.timings,
-        mirrors: job.mirrors.length,
-        diagnostics: [...(job.diagnostics ?? [])],
+      if (lane === 'publish') {
+        await runPublishPhase(job, onProgress, controller.signal)
+        // Visible sur le mur : la réplication continue sur l'autre voie.
+        this.progress.delete(id)
+        this.enqueue(job)
+      } else {
+        await runMirrorPhase(job, onProgress, controller.signal)
+        const finished: JobView = {
+          id,
+          tag: job.tag,
+          state: 'done',
+          progress: { stage: 'done', message: 'Publiée' },
+          createdAt: job.createdAt,
+          timings: job.timings,
+          mirrors: job.mirrors.length,
+          diagnostics: [...(job.diagnostics ?? [])],
+        }
+        this.recent = [finished, ...this.recent].slice(0, 5)
+        this.jobs.delete(id)
       }
-      this.recent = [finished, ...this.recent].slice(0, 5)
-      this.jobs.delete(id)
     } catch (err) {
       if (!controller.signal.aborted) {
         job.state = job.eventId ? 'published' : 'failed'
@@ -522,9 +624,9 @@ class Publisher {
         await putJob(job)
       }
     } finally {
-      this.active = null
+      this.active[lane] = null
       this.emit()
-      void this.pump()
+      void this.pump(lane)
     }
   }
 }

@@ -36,14 +36,33 @@ export const DEFAULT_RELAYS = list(env.VITE_RELAYS, [
  * Serveurs Blossom, par ordre de préférence. Le client essaie chaque serveur via
  * HEAD /upload (BUD-06) et ignore ceux qui refusent (taille, paiement, liste blanche) :
  * une liste plus longue que nécessaire augmente la probabilité de trouver 3 hébergeurs.
+ *
+ * Ordre établi par la sonde `scripts/probe-servers.mjs` (1ᵉʳ nov. 2026, origine github.io) et
+ * un test réel sur iPhone : seuls ces serveurs acceptent une clé inconnue sans abonnement.
+ *  - nostr.download    : rapide, CORS complet, plages d'octets
+ *  - cdn.nostrcheck.me : « Upload allowed », CORS complet
+ *  - blossom.nostr.build / blossom.band : acceptent, mais analyse antivirus lente (> 30 s)
+ *  - blossom.primal.net : accepte au HEAD, mais réponses d'erreur sans en-têtes CORS
+ * Écartés : blosstr.com (abonnement payant), 24242.io, cdn.satellite.earth, files.sovbit.host.
  */
 export const DEFAULT_BLOSSOM_SERVERS = list(env.VITE_BLOSSOM_SERVERS, [
-  'https://blossom.nostr.build',
-  'https://blossom.primal.net',
   'https://nostr.download',
-  'https://blosstr.com',
   'https://cdn.nostrcheck.me',
+  'https://blossom.nostr.build',
+  'https://blossom.band',
+  'https://blossom.primal.net',
 ])
+
+/** Anciennes listes par défaut : un réglage identique n'est pas un choix de l'utilisateur. */
+export const LEGACY_DEFAULT_BLOSSOM_SERVERS = [
+  [
+    'https://blossom.nostr.build',
+    'https://blossom.primal.net',
+    'https://nostr.download',
+    'https://blosstr.com',
+    'https://cdn.nostrcheck.me',
+  ],
+]
 
 /** Clés publiques (hex ou npub) de collectifs de modération dont on applique les listes kind:10000. */
 export const DEFAULT_MODERATORS = list(env.VITE_MODERATORS, [])

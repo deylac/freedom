@@ -21,6 +21,8 @@ export interface BlobDescriptor {
   size: number
   type?: string
   uploaded?: number
+  /** Accepté seulement sans l'en-tête optionnel X-SHA-256 (configuration CORS du serveur incomplète). */
+  minimalHeaders?: boolean
 }
 
 export type BlossomErrorKind = 'rejected' | 'network' | 'mismatch' | 'timeout' | 'aborted'
@@ -175,19 +177,47 @@ export interface UploadOptions {
   signal?: AbortSignal
   /** Abandon si aucun octet n'est parti pendant ce délai (réseau saturé). */
   stallTimeoutMs?: number
+  /**
+   * Délai de réponse une fois le fichier entièrement envoyé. Constaté en réel : certains serveurs
+   * (antivirus, transcodage d'empreinte) mettent plus de 30 s à répondre après réception.
+   */
+  responseTimeoutMs?: number
 }
 
-export function uploadBlob(server: string, blob: Blob, opts: UploadOptions): Promise<BlobDescriptor> {
+/**
+ * Envoi avec repli CORS : certains serveurs n'autorisent pas l'en-tête optionnel `X-SHA-256`
+ * dans leur réponse CORS ; le navigateur bloque alors la requête avant même de l'envoyer
+ * (erreur réseau immédiate). On retente une fois sans cet en-tête.
+ */
+export async function uploadBlob(server: string, blob: Blob, opts: UploadOptions): Promise<BlobDescriptor> {
+  try {
+    return await uploadOnce(server, blob, opts, false)
+  } catch (err) {
+    if (!(err instanceof BlossomError) || err.kind !== 'network' || opts.signal?.aborted) throw err
+    const descriptor = await uploadOnce(server, blob, opts, true)
+    return { ...descriptor, minimalHeaders: true }
+  }
+}
+
+function uploadOnce(server: string, blob: Blob, opts: UploadOptions, minimal: boolean): Promise<BlobDescriptor> {
   const mime = baseMime(opts.type)
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     let lastProgress = Date.now()
+    /** Corps entièrement transmis : on attend la réponse du serveur, ce n'est plus un blocage réseau. */
+    let bodySentAt = 0
     const stallMs = opts.stallTimeoutMs ?? 30_000
+    const responseMs = opts.responseTimeoutMs ?? 120_000
     const watchdog = setInterval(() => {
-      if (Date.now() - lastProgress > stallMs) {
+      const now = Date.now()
+      if (bodySentAt && now - bodySentAt > responseMs) {
         cleanup()
         xhr.abort()
-        reject(new BlossomError(server, 'timeout', 0, 'envoi bloqué'))
+        reject(new BlossomError(server, 'timeout', 0, `fichier reçu mais pas de réponse en ${Math.round(responseMs / 1000)} s`))
+      } else if (!bodySentAt && now - lastProgress > stallMs) {
+        cleanup()
+        xhr.abort()
+        reject(new BlossomError(server, 'timeout', 0, 'envoi bloqué (aucun octet transmis)'))
       }
     }, 1000)
     const onAbort = () => {
@@ -204,11 +234,16 @@ export function uploadBlob(server: string, blob: Blob, opts: UploadOptions): Pro
     xhr.open('PUT', endpoint(server, '/upload'))
     xhr.withCredentials = false
     xhr.setRequestHeader('Content-Type', mime)
-    xhr.setRequestHeader('X-SHA-256', opts.sha256)
+    if (!minimal) xhr.setRequestHeader('X-SHA-256', opts.sha256)
     xhr.setRequestHeader('Authorization', authHeader(opts.token))
     xhr.upload.onprogress = (e) => {
       lastProgress = Date.now()
-      opts.onProgress?.(e.loaded, e.lengthComputable ? e.total : blob.size)
+      const total = e.lengthComputable ? e.total : blob.size
+      if (e.loaded >= total) bodySentAt ||= lastProgress
+      opts.onProgress?.(e.loaded, total)
+    }
+    xhr.upload.onload = () => {
+      bodySentAt ||= Date.now()
     }
     xhr.onload = () => {
       cleanup()
@@ -233,25 +268,35 @@ export function uploadBlob(server: string, blob: Blob, opts: UploadOptions): Pro
 // ---------------------------------------------------------------------------
 // BUD-04 — PUT /mirror
 
-export async function mirrorBlob(
-  server: string,
-  sourceUrl: string,
-  opts: { sha256: string; type: string; size: number; token: NostrEvent; timeoutMs?: number; signal?: AbortSignal },
-): Promise<BlobDescriptor> {
+export interface MirrorOptions {
+  sha256: string
+  type: string
+  size: number
+  token: NostrEvent
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+/** PUT /mirror avec le même repli CORS que l'envoi (nouvel essai sans X-SHA-256). */
+export async function mirrorBlob(server: string, sourceUrl: string, opts: MirrorOptions): Promise<BlobDescriptor> {
+  try {
+    return await mirrorOnce(server, sourceUrl, opts, false)
+  } catch (err) {
+    if (!(err instanceof BlossomError) || err.kind !== 'network' || opts.signal?.aborted) throw err
+    return { ...(await mirrorOnce(server, sourceUrl, opts, true)), minimalHeaders: true }
+  }
+}
+
+async function mirrorOnce(server: string, sourceUrl: string, opts: MirrorOptions, minimal: boolean): Promise<BlobDescriptor> {
   let res: Response
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: authHeader(opts.token) }
+  if (!minimal) headers['X-SHA-256'] = opts.sha256
   try {
     res = await fetchWithTimeout(
       endpoint(server, '/mirror'),
-      {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-SHA-256': opts.sha256,
-          Authorization: authHeader(opts.token),
-        },
-        body: JSON.stringify({ url: sourceUrl }),
-      },
-      opts.timeoutMs ?? 60_000,
+      { method: 'PUT', headers, body: JSON.stringify({ url: sourceUrl }) },
+      // Le serveur télécharge puis analyse le fichier : peut dépasser la minute (nostr.build).
+      opts.timeoutMs ?? 120_000,
       opts.signal,
     )
   } catch (err) {
