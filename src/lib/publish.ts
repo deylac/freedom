@@ -13,7 +13,8 @@
  * Chaque étape est enregistrée dans la file IndexedDB : une coupure reprend là où elle s'est arrêtée.
  */
 import { hexToBytes } from '@noble/hashes/utils.js'
-import { MAX_UPLOAD_BYTES, MIRROR_TARGET } from '../config'
+import { MAX_UPLOAD_BYTES, MIRROR_TARGET, REPORT_POW_BITS } from '../config'
+import { withProofOfWork } from './pow'
 import {
   BlossomError,
   createAuthToken,
@@ -688,7 +689,9 @@ export async function reportClip(clip: Clip, reason: ReportReason, comment: stri
         .filter((s): s is string => !!s),
     ),
   ]
-  const event = await signer.sign(buildReportEvent(clip, reason, comment, blobServers))
+  // Preuve de travail : sans elle, un signalement d'une clé inconnue ne compte pas (anti-Sybil).
+  const template = await withProofOfWork(buildReportEvent(clip, reason, comment, blobServers), signer.pubkey, REPORT_POW_BITS)
+  const event = await signer.sign(template)
   const { all } = publishEvent(settings.relays, event, signer)
   const blossom = clip.video.sha256 ? await Promise.all(blobServers.map((s) => reportBlob(s, event))) : []
   const relays = await all.then((r) => r.ok.length).catch(() => 0)

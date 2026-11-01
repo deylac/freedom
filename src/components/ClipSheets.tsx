@@ -99,7 +99,7 @@ export function ClipMenu({
       <Sheet title="Signaler cette vidéo" onClose={onClose}>
         <p className="mb-4 text-sm text-muted">
           Le signalement (NIP-56) est diffusé sur les relais et envoyé aux serveurs qui hébergent le fichier (BUD-09). La vidéo
-          sera immédiatement masquée pour vous.
+          sera immédiatement masquée pour vous. Un calcul anti-spam de quelques secondes rend le signalement crédible.
         </p>
         <div className="space-y-2">
           {REPORT_CHOICES.map((c) => (

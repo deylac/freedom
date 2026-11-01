@@ -1,5 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
+import { minePow } from 'nostr-tools/nip13'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import { describe, expect, it } from 'vitest'
 import { emptyMuteList } from './moderation/policy'
@@ -72,7 +73,7 @@ describe('WallStore', () => {
   })
 
   it('floute après N signalements de clés distinctes, quelle que soit la version signalée', () => {
-    const s = new WallStore('mur', { ...emptyContext(), threshold: 2 })
+    const s = new WallStore('mur', { ...emptyContext(), threshold: 2, powBits: 0 })
     const v1 = video(alice, 1, { createdAt: 1000 })
     s.ingest(v1)
     const clipV1 = parseVideoEvent(v1)!
@@ -88,7 +89,7 @@ describe('WallStore', () => {
   })
 
   it('ne compte pas l’auteur ni deux fois la même clé', () => {
-    const s = new WallStore('mur', { ...emptyContext(), threshold: 2 })
+    const s = new WallStore('mur', { ...emptyContext(), threshold: 2, powBits: 0 })
     const ev = video(alice, 1)
     s.ingest(ev)
     const clip = parseVideoEvent(ev)!
@@ -96,6 +97,54 @@ describe('WallStore', () => {
     s.ingest(finalizeEvent(buildReportEvent(clip, 'spam', '', []), bob))
     s.ingest(finalizeEvent({ ...buildReportEvent(clip, 'spam', 'encore', []), created_at: nowSeconds() + 1 }, bob))
     expect(s.getSnapshot().items[0].verdict.status).toBe('visible')
+  })
+
+  describe('signalements vérifiés (anti-Sybil)', () => {
+    const report = (clip: ReturnType<typeof parseVideoEvent>, sk: Uint8Array, bits: number) => {
+      const t = buildReportEvent(clip!, 'spam', '', [])
+      const mined = bits ? minePow({ ...t, pubkey: getPublicKey(sk) }, bits) : t
+      return finalizeEvent({ kind: mined.kind, created_at: mined.created_at, content: mined.content, tags: mined.tags }, sk)
+    }
+    const setup = (extra = {}) => {
+      const s = new WallStore('mur', { ...emptyContext(), threshold: 3, powBits: 8, ...extra })
+      const ev = video(alice, 1)
+      s.ingest(ev)
+      return { s, clip: parseVideoEvent(ev) }
+    }
+
+    it('3 signalements de clés jetables sans preuve de travail : la vidéo reste visible', () => {
+      const { s, clip } = setup()
+      for (let i = 0; i < 3; i++) s.ingest(report(clip, generateSecretKey(), 0))
+      const v = s.getSnapshot().items[0].verdict
+      expect(v.status).toBe('visible')
+      expect(v.status !== 'hidden' && v.unverified).toBe(3)
+    })
+
+    it('3 signalements avec preuve de travail suffisante : floutée', () => {
+      const { s, clip } = setup()
+      for (let i = 0; i < 3; i++) s.ingest(report(clip, generateSecretKey(), 8))
+      expect(s.getSnapshot().items[0].verdict.status).toBe('warn')
+    })
+
+    it('un contact d’un modérateur compte sans preuve de travail', () => {
+      const moderator = generateSecretKey()
+      const friend = generateSecretKey()
+      const { s, clip } = setup({ moderators: new Set([getPublicKey(moderator)]) })
+      s.ingest(finalizeEvent({ kind: 3, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(friend)]] }, moderator))
+      s.ingest(report(clip, friend, 0))
+      s.ingest(report(clip, generateSecretKey(), 8))
+      s.ingest(report(clip, generateSecretKey(), 8))
+      expect(s.getSnapshot().items[0].verdict.status).toBe('warn')
+    })
+
+    it('une liste de contacts d’une clé non modératrice est ignorée', () => {
+      const impostor = generateSecretKey()
+      const friend = generateSecretKey()
+      const { s, clip } = setup()
+      s.ingest(finalizeEvent({ kind: 3, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(friend)]] }, impostor))
+      s.ingest(report(clip, friend, 0))
+      expect(s.getSnapshot().items[0].verdict.status).toBe('visible')
+    })
   })
 
   it('un signalement de modérateur suffit', () => {

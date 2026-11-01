@@ -51,16 +51,32 @@ export interface ModerationContext {
   /** Clips masqués localement (signalés par moi, « ne plus voir »). */
   hiddenKeys: Set<string>
   moderators: Set<string>
+  /** Clés suivies par un modérateur (Web of Trust de profondeur 1, kind 3). */
+  trusted: Set<string>
+  /** Preuve de travail minimale (bits NIP-13) d'un signalement venant d'une clé inconnue. */
+  powBits: number
   threshold: number
 }
 
-export type Verdict =
-  | { status: 'visible' }
-  | { status: 'hidden'; reason: string }
-  | { status: 'warn'; reasons: string[]; reports: number }
+/** Un signalement : motif et preuve de travail (bits de tête nuls de l'id). */
+export interface ReportInfo {
+  reason: ReportReason
+  pow: number
+}
 
-/** reporters : clé publique → motif, pour toutes les cibles (x, e, a) du clip. */
-export function evaluateClip(clip: Clip, reporters: Map<string, ReportReason>, ctx: ModerationContext): Verdict {
+export type Verdict =
+  | { status: 'hidden'; reason: string }
+  | { status: 'warn'; reasons: string[]; reports: number; unverified: number }
+  | { status: 'visible'; unverified: number }
+
+/**
+ * reporters : clé publique → signalement, pour toutes les cibles (x, e, a) du clip.
+ *
+ * Seuls les signalements VÉRIFIÉS comptent pour le seuil : modérateur, clé suivie par un modérateur,
+ * ou preuve de travail ≥ powBits. Sans cela, créer N clés gratuites suffirait à flouter n'importe
+ * quelle vidéo (attaque Sybil). Les autres restent comptés à titre indicatif.
+ */
+export function evaluateClip(clip: Clip, reporters: Map<string, ReportInfo>, ctx: ModerationContext): Verdict {
   if (ctx.hiddenKeys.has(clip.key)) return { status: 'hidden', reason: 'Masqué par vous' }
   if (ctx.mutes.pubkeys.has(clip.pubkey)) return { status: 'hidden', reason: 'Auteur masqué' }
   if (ctx.mutes.events.has(clip.id)) return { status: 'hidden', reason: 'Vidéo masquée par une liste de modération' }
@@ -71,14 +87,20 @@ export function evaluateClip(clip: Clip, reporters: Map<string, ReportReason>, c
   if (ctx.mutes.words.some((w) => w && text.includes(w))) return { status: 'hidden', reason: 'Mot masqué' }
 
   let count = 0
+  let unverified = 0
   let byModerator = false
   const reasons = new Set<string>()
-  for (const [reporter, reason] of reporters) {
+  for (const [reporter, info] of reporters) {
     // Un auteur ne compte pas contre lui-même ; les clés masquées ne comptent pas.
     if (reporter === clip.pubkey || ctx.mutes.pubkeys.has(reporter)) continue
+    const moderator = ctx.moderators.has(reporter)
+    if (!moderator && !ctx.trusted.has(reporter) && info.pow < ctx.powBits) {
+      unverified++
+      continue
+    }
     count++
-    reasons.add(REASON_LABELS[reason] ?? REASON_LABELS.other)
-    if (ctx.moderators.has(reporter)) byModerator = true
+    reasons.add(REASON_LABELS[info.reason] ?? REASON_LABELS.other)
+    if (moderator) byModerator = true
   }
 
   const warnings: string[] = []
@@ -86,7 +108,7 @@ export function evaluateClip(clip: Clip, reporters: Map<string, ReportReason>, c
   if (byModerator || count >= Math.max(1, ctx.threshold)) {
     warnings.push(`Signalée ${count} fois${byModerator ? ' (dont un modérateur)' : ''} : ${[...reasons].join(', ')}`)
   }
-  return warnings.length > 0 ? { status: 'warn', reasons: warnings, reports: count } : { status: 'visible' }
+  return warnings.length > 0 ? { status: 'warn', reasons: warnings, reports: count, unverified } : { status: 'visible', unverified }
 }
 
 export const REASON_LABELS: Record<ReportReason, string> = {

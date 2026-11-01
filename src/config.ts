@@ -81,7 +81,13 @@ export const DEFAULT_MODERATORS = list(env.VITE_MODERATORS, [])
 /** Murs mis en avant sur la page d'accueil. */
 export const FEATURED_TAGS = list(env.VITE_FEATURED_TAGS, [])
 
-/** Nombre de signalements (clés distinctes) à partir duquel une vidéo est floutée. */
+/**
+ * Preuve de travail NIP-13 exigée pour qu'un signalement d'une clé inconnue compte (≈ 1 million de
+ * hachages : quelques secondes sur téléphone). Ralentisseur contre les fausses clés, pas une garantie.
+ */
+export const REPORT_POW_BITS = 20
+
+/** Nombre de signalements VÉRIFIÉS (clés distinctes) à partir duquel une vidéo est floutée. */
 export const DEFAULT_REPORT_THRESHOLD = int(env.VITE_REPORT_THRESHOLD, 3)
 
 /** Durée maximale d'un clip (FR-03). */

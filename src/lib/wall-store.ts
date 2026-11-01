@@ -3,11 +3,13 @@
  * Indépendant de React (testable) ; exposé via useSyncExternalStore.
  */
 import type { NostrEvent } from 'nostr-tools/pure'
-import { MAX_CLIPS_PER_AUTHOR } from '../config'
+import { getPow } from 'nostr-tools/nip13'
+import { MAX_CLIPS_PER_AUTHOR, REPORT_POW_BITS } from '../config'
 import {
   isNewerVersion,
   KIND_DELETION,
   KIND_LEGACY_SHORT_VIDEO,
+  KIND_FOLLOWS,
   KIND_MUTE_LIST,
   KIND_REPORT,
   KIND_SERVER_LIST,
@@ -15,7 +17,6 @@ import {
   parseVideoEvent,
   type CanPlay,
   type Clip,
-  type ReportReason,
 } from './nostr/events'
 import {
   emptyMuteList,
@@ -24,6 +25,7 @@ import {
   parseMuteList,
   reportTargets,
   type ModerationContext,
+  type ReportInfo,
   type MuteList,
   type Verdict,
 } from './moderation/policy'
@@ -45,6 +47,8 @@ export interface StoreContext {
   localMutes: MuteList
   moderators: Set<string>
   threshold: number
+  /** Bits de preuve de travail exigés des signalements de clés inconnues (défaut : REPORT_POW_BITS). */
+  powBits?: number
   /** Clé de l'identité courante : ses propres listes kind 10000 s'appliquent aussi. */
   self?: string
 }
@@ -58,7 +62,8 @@ export class WallStore {
   private deletedIds = new Set<string>()
   private pendingIdDeletions = new Map<string, Set<string>>()
   private addressDeletions = new Map<string, number>()
-  private reports = new Map<string, Map<string, ReportReason>>()
+  private reports = new Map<string, Map<string, ReportInfo>>()
+  private follows = new Map<string, { at: number; pubkeys: string[] }>()
   private serverLists = new Map<string, { at: number; servers: string[] }>()
   private muteLists = new Map<string, { at: number; list: MuteList }>()
   private listeners = new Set<Listener>()
@@ -127,6 +132,8 @@ export class WallStore {
         return this.ingestServerList(event)
       case KIND_MUTE_LIST:
         return this.ingestMuteList(event)
+      case KIND_FOLLOWS:
+        return this.ingestFollows(event)
     }
   }
 
@@ -183,9 +190,11 @@ export class WallStore {
 
   private ingestReport(event: NostrEvent) {
     const { targets, reason } = reportTargets(event)
+    const pow = getPow(event.id)
     for (const target of targets) {
-      const map = this.reports.get(target) ?? new Map<string, ReportReason>()
-      map.set(event.pubkey, reason)
+      const map = this.reports.get(target) ?? new Map<string, ReportInfo>()
+      const prev = map.get(event.pubkey)
+      map.set(event.pubkey, { reason, pow: Math.max(pow, prev?.pow ?? 0) })
       this.reports.set(target, map)
     }
     if (targets.length) this.changed()
@@ -196,6 +205,16 @@ export class WallStore {
     if (prev && prev.at >= event.created_at) return
     const servers = event.tags.filter((t) => t[0] === 'server' && t[1]).map((t) => t[1])
     this.serverLists.set(event.pubkey, { at: event.created_at, servers })
+    this.changed()
+  }
+
+  /** Liste d'abonnements (kind 3) d'un modérateur : Web of Trust de profondeur 1. */
+  private ingestFollows(event: NostrEvent) {
+    if (!this.context.moderators.has(event.pubkey)) return
+    const prev = this.follows.get(event.pubkey)
+    if (prev && prev.at >= event.created_at) return
+    const pubkeys = event.tags.filter((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? '')).map((t) => t[1])
+    this.follows.set(event.pubkey, { at: event.created_at, pubkeys })
     this.changed()
   }
 
@@ -218,8 +237,19 @@ export class WallStore {
     return this.clips.get(key) ?? this.clips.get(this.idToKey.get(key) ?? '')
   }
 
+  get size(): number {
+    return this.clips.size
+  }
+
+  /** Date de l'événement le plus ancien reçu (pour charger la page précédente). */
+  oldestCreatedAt(): number | undefined {
+    let min: number | undefined
+    for (const c of this.clips.values()) if (min === undefined || c.createdAt < min) min = c.createdAt
+    return min
+  }
+
   /** Cibles pour l'abonnement d'annotations (signalements, suppressions, serveurs). */
-  annotationTargets(limit = 150): { ids: string[]; addresses: string[]; hashes: string[]; pubkeys: string[] } {
+  annotationTargets(limit = 400): { ids: string[]; addresses: string[]; hashes: string[]; pubkeys: string[] } {
     const clips = [...this.clips.values()].sort((a, b) => b.publishedAt - a.publishedAt).slice(0, limit)
     return {
       ids: clips.map((c) => c.id),
@@ -229,11 +259,16 @@ export class WallStore {
     }
   }
 
-  reportersFor(clip: Clip): Map<string, ReportReason> {
-    const out = new Map<string, ReportReason>()
+  reportersFor(clip: Clip): Map<string, ReportInfo> {
+    const out = new Map<string, ReportInfo>()
     const keys = [`a:${clip.key}`, `x:${clip.video.sha256 ?? ''}`]
     this.keyToIds.get(clip.key)?.forEach((id) => keys.push(`e:${id}`))
-    for (const k of keys) this.reports.get(k)?.forEach((reason, reporter) => out.set(reporter, reason))
+    for (const k of keys) {
+      this.reports.get(k)?.forEach((info, reporter) => {
+        const prev = out.get(reporter)
+        out.set(reporter, prev && prev.pow >= info.pow ? prev : info)
+      })
+    }
     return out
   }
 
@@ -249,6 +284,8 @@ export class WallStore {
       mutes: mergeMuteLists([this.context.localMutes, ...[...this.muteLists.values()].map((m) => m.list)]),
       hiddenKeys: this.context.hiddenKeys,
       moderators: this.context.moderators,
+      trusted: new Set([...this.follows.values()].flatMap((f) => f.pubkeys)),
+      powBits: this.context.powBits ?? REPORT_POW_BITS,
       threshold: this.context.threshold,
     }
     const live = [...this.clips.values()].filter((c) => !this.isDeleted(c))
