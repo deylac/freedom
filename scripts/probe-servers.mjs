@@ -166,6 +166,32 @@ for (const api of ['https://blockstream.info/api', 'https://mempool.space/api'])
   console.log(`=== ${api}\n  tip ${fmt(tip)} acao=${tip.h('access-control-allow-origin') ?? '-'} ; block-height ${fmt(hash)} acao=${hash.h('access-control-allow-origin') ?? '-'}`)
 }
 
+// --- Vérité terrain pour les tests OpenTimestamps (preuves officielles d'exemple) ---
+for (const height of [358391, 428648]) {
+  for (const api of ['https://blockstream.info/api', 'https://mempool.space/api']) {
+    try {
+      const hash = (await (await fetch(`${api}/block-height/${height}`)).text()).trim()
+      const block = await (await fetch(`${api}/block/${hash}`)).json()
+      console.log(`BLOC ${height} ${new URL(api).host} merkle_root=${block.merkle_root} timestamp=${block.timestamp}`)
+    } catch (err) {
+      console.log(`BLOC ${height} ${api} ERREUR ${err.message}`)
+    }
+  }
+}
+// Mise à niveau d'une preuve « en attente » de 2016 (incomplete.txt.ots) : la réponse 200 a-t-elle CORS ?
+for (const [cal, msg] of [
+  ['https://alice.btc.calendar.opentimestamps.org', '57cfa5c46716df9bd9e83595bce439c58108d8fcc1678f30d4c6731c3f1fa6c79ed712c66fb1ac8d4e4eb0e7'],
+  ['https://bob.btc.calendar.opentimestamps.org', '57d982e0a2181eb7fd470600d82119b73d7ae5da2d8c84db7d55fd45b568fac036d86f906644ef713071762a'],
+]) {
+  try {
+    const res = await fetch(`${cal}/timestamp/${msg}`, { headers: { Origin: ORIGIN, Accept: 'application/vnd.opentimestamps.v1' } })
+    const bytes = Buffer.from(await res.arrayBuffer())
+    console.log(`UPGRADE ${new URL(cal).host} ${res.status} acao=${res.headers.get('access-control-allow-origin') ?? '-'} ${bytes.length} octets hex=${bytes.toString('hex')}`)
+  } catch (err) {
+    console.log(`UPGRADE ${cal} ERREUR ${err.message}`)
+  }
+}
+
 // --- Hébergement du modèle MediaPipe (pour information) ---
 const model = await req('https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite', { method: 'HEAD', headers: { Origin: ORIGIN } })
 console.log(`=== modèle MediaPipe sur storage.googleapis.com : ${fmt(model)} acao=${model.h('access-control-allow-origin') ?? '-'}`)
