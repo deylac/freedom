@@ -19,6 +19,7 @@ import {
   BlossomError,
   createAuthToken,
   deleteBlob,
+  hasBlob,
   mirrorBlob,
   preflightUpload,
   reportBlob,
@@ -685,24 +686,59 @@ export const publisher = new Publisher()
 // ---------------------------------------------------------------------------
 // Suppression (NIP-09 + BUD-12)
 
-export async function deleteMyClip(clip: MyClip): Promise<{ relays: number; servers: number }> {
-  if (!clip.sk) throw new Error('Clé de suppression non conservée sur cet appareil')
-  const signer = localSigner(hexToBytes(clip.sk))
-  const event = await signer.sign(buildDeletionEvent({ ids: [clip.eventId], addresses: [clip.key], kind: clip.kind }))
-  const { all } = publishEvent(getSettings().relays, event, signer)
-  const blobs = [clip.sha256, ...(clip.posterSha256 ? [clip.posterSha256] : [])]
-  // BUD-11 : jeton de suppression restreint aux serveurs concernés (pas de rejeu ailleurs).
-  const token = await createAuthToken(signer, 'delete', { sha256: blobs, servers: clip.servers, ttl: 300 })
-  const deletions = await Promise.all(
-    clip.servers.flatMap((s) => blobs.map((sha) => deleteBlob(s, sha, token))),
-  )
-  const relays = await all.then((r) => r.ok.length).catch(() => 0)
-  removeMyClip(clip.key)
-  return { relays, servers: deletions.filter(Boolean).length }
+export interface DeletionResult {
+  /** done : relais ET serveurs confirmés ; partial : une partie ; failed : rien n'a répondu. */
+  status: 'done' | 'partial' | 'failed'
+  relays: number
+  relaysTotal: number
+  /** Serveurs dont tous les fichiers sont confirmés supprimés. */
+  servers: number
+  serversTotal: number
 }
 
-// ---------------------------------------------------------------------------
-// Signalement (NIP-56 vers les relais + BUD-09 vers les serveurs Blossom)
+/**
+ * Suppression NIP-09 + BUD-12. Audit F04 : l'enregistrement local et la clé ne sont retirés qu'une
+ * fois la suppression confirmée (au moins un relais et tous les serveurs) ; sinon l'état est
+ * conservé et une nouvelle tentative ne relance que les cibles restantes.
+ */
+export async function deleteMyClip(clip: MyClip): Promise<DeletionResult> {
+  if (!clip.sk) throw new Error('Clé de suppression non conservée sur cet appareil')
+  const signer = localSigner(hexToBytes(clip.sk))
+  const relayList = getSettings().relays
+  const event = await signer.sign(buildDeletionEvent({ ids: [clip.eventId], addresses: [clip.key], kind: clip.kind }))
+  const { all } = publishEvent(relayList, event, signer)
+  const blobs = [clip.sha256, ...(clip.posterSha256 ? [clip.posterSha256] : [])]
+  const already = new Set(clip.deletion?.blobsDone ?? [])
+  const pending = clip.servers.flatMap((server) => blobs.map((sha) => ({ server, sha }))).filter((b) => !already.has(`${b.server}/${b.sha}`))
+  // BUD-11 : jeton de suppression restreint aux serveurs concernés (pas de rejeu ailleurs).
+  const token = pending.length
+    ? await createAuthToken(signer, 'delete', { sha256: blobs, servers: [...new Set(pending.map((p) => p.server))], ttl: 300 })
+    : null
+  const outcomes = await Promise.all(
+    pending.map(async ({ server, sha }) => {
+      const outcome = await deleteBlob(server, sha, token!)
+      // 404 : fichier déjà absent… ou fonction absente. On vérifie par HEAD avant de conclure.
+      const done = outcome === 'deleted' || (outcome === 'not-found' && !(await hasBlob(`${server}/${sha}`)))
+      return { id: `${server}/${sha}`, done }
+    }),
+  )
+  const blobsDone = [...already, ...outcomes.filter((o) => o.done).map((o) => o.id)]
+  const serversDone = clip.servers.filter((server) => blobs.every((sha) => blobsDone.includes(`${server}/${sha}`)))
+  const relays = await all.then((r) => r.ok.length).catch(() => 0)
+  const relaysEver = Math.max(relays, clip.deletion?.relays ?? 0)
+
+  const complete = relaysEver > 0 && serversDone.length === clip.servers.length
+  const status: DeletionResult['status'] = complete ? 'done' : relaysEver === 0 && blobsDone.length === 0 ? 'failed' : 'partial'
+  if (complete) {
+    removeMyClip(clip.key)
+  } else {
+    saveMyClip({
+      ...clip,
+      deletion: { status: status as 'failed' | 'partial', at: Date.now(), attempts: (clip.deletion?.attempts ?? 0) + 1, relays: relaysEver, blobsDone, serversDone },
+    })
+  }
+  return { status, relays, relaysTotal: relayList.length, servers: serversDone.length, serversTotal: clip.servers.length }
+}
 
 export async function reportClip(clip: Clip, reason: ReportReason, comment: string, hostingServers: string[]) {
   const settings = getSettings()

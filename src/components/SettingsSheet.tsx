@@ -166,6 +166,12 @@ export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => 
                 <li key={c.key} className="flex items-center justify-between gap-3 rounded-lg bg-night/70 px-3 py-2 text-sm">
                   <a href={`#${encodeURIComponent(c.tag)}`} onClick={onClose} className="min-w-0 truncate text-white hover:text-accent">
                     #{c.tag} <span className="text-xs text-muted">{relativeTime(c.publishedAt)} · {c.servers.length} serveur{c.servers.length > 1 ? 's' : ''}</span>
+                    {c.deletion && (
+                      <span className="block text-xs text-rec" data-testid="deletion-pending">
+                        Suppression {c.deletion.status === 'partial' ? 'partielle' : 'en échec'} ({c.deletion.serversDone.length}/{c.servers.length} serveurs,{' '}
+                        {c.deletion.relays} relais) — toucher la corbeille pour réessayer
+                      </span>
+                    )}
                   </a>
                   <button
                     disabled={!c.sk || deleting === c.key}
@@ -173,11 +179,14 @@ export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => 
                     aria-label="Supprimer cette vidéo"
                     className="shrink-0 rounded-lg p-1.5 text-rec disabled:opacity-30"
                     onClick={async () => {
-                      if (!confirm('Demander la suppression de cette vidéo sur les relais et serveurs ? Les copies déjà téléchargées ailleurs ne peuvent pas être effacées.')) return
+                      if (!c.deletion && !confirm('Demander la suppression de cette vidéo sur les relais et serveurs ? Les copies déjà téléchargées ailleurs ne peuvent pas être effacées.')) return
                       setDeleting(c.key)
                       try {
                         const r = await deleteMyClip(c)
-                        toast(`Suppression demandée : ${r.relays} relais, ${r.servers} fichiers supprimés`, 'ok')
+                        const detail = `${r.relays}/${r.relaysTotal} relais, ${r.servers}/${r.serversTotal} serveurs média`
+                        if (r.status === 'done') toast(`Suppression confirmée : ${detail}. Les copies faites ailleurs peuvent subsister.`, 'ok')
+                        else if (r.status === 'partial') toast(`Suppression partielle (${detail}) : réessayez plus tard, la vidéo reste dans la liste.`, 'error')
+                        else toast('Suppression impossible : aucun relais ni serveur n’a répondu. Réessayez quand le réseau revient.', 'error')
                       } catch (err) {
                         toast(err instanceof Error ? err.message : String(err), 'error')
                       } finally {

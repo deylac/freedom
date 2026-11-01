@@ -23,6 +23,20 @@ export interface MyClip {
   url: string
   /** Preuve OpenTimestamps publiée (base64). */
   ots?: string
+  /**
+   * Suppression demandée mais pas encore confirmée partout (audit F04) : l'enregistrement et la
+   * clé sont conservés pour pouvoir réessayer, même après rotation d'identité ou rechargement.
+   */
+  deletion?: {
+    status: 'failed' | 'partial'
+    at: number
+    attempts: number
+    relays: number
+    /** Fichiers confirmés supprimés (ou absents), sous la forme `serveur/empreinte`. */
+    blobsDone: string[]
+    /** Serveurs dont tous les fichiers sont supprimés. */
+    serversDone: string[]
+  }
 }
 
 type Listener = () => void

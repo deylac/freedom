@@ -321,16 +321,19 @@ export async function hasBlob(url: string, timeoutMs = 6000): Promise<boolean> {
 // ---------------------------------------------------------------------------
 // BUD-12 — DELETE /<sha256>
 
-export async function deleteBlob(server: string, sha256: string, token: NostrEvent): Promise<boolean> {
+export type DeleteOutcome = 'deleted' | 'not-found' | 'failed'
+
+/** `not-found` est ambigu (fichier absent OU fonction non prise en charge) : l'appelant vérifie par HEAD. */
+export async function deleteBlob(server: string, sha256: string, token: NostrEvent): Promise<DeleteOutcome> {
   try {
     const res = await fetchWithTimeout(
       endpoint(server, `/${sha256}`),
       { method: 'DELETE', headers: { Authorization: authHeader(token) } },
       10_000,
     )
-    return res.ok
+    return res.ok ? 'deleted' : res.status === 404 ? 'not-found' : 'failed'
   } catch {
-    return false
+    return 'failed'
   }
 }
 

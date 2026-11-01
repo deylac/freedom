@@ -861,8 +861,14 @@ await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', 
   await watcher.goto(`${APP}#14octobre`)
   await watcher.locator('[data-clip-key]').first().waitFor({ timeout: 10_000 })
   await witness.getByRole('button', { name: 'Réglages' }).click()
+  // Audit F04 : serveurs média injoignables → suppression partielle, la vidéo et sa clé restent suivies.
+  await witness.route(/127\.0\.0\.1:300[123]\//, (route) => route.abort('connectionrefused'))
   await witness.getByRole('button', { name: 'Supprimer cette vidéo' }).first().click()
-  await witness.getByText(/Suppression demandée/).waitFor({ timeout: 10_000 })
+  await witness.getByText(/Suppression partielle/).waitFor({ timeout: 20_000 })
+  await witness.getByTestId('deletion-pending').first().waitFor({ timeout: 5_000 })
+  await witness.unroute(/127\.0\.0\.1:300[123]\//)
+  await witness.getByRole('button', { name: 'Supprimer cette vidéo' }).first().click()
+  await witness.getByText(/Suppression confirmée/).waitFor({ timeout: 20_000 })
   const deletion = relay.received.find((e) => e.kind === 5)
   assert.ok(deletion && tagOf(deletion, 'a') && tagOf(deletion, 'k'), 'kind 5 incomplet')
   const sha = imeta(firstEvent).x[0]
