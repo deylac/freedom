@@ -1,7 +1,11 @@
 name: Déployer sur GitHub Pages
 
+# Déploiement conditionné à la réussite de la CI (typecheck, tests, build, E2E) sur le MÊME commit
+# (recommandation de l'audit du 1ᵉʳ nov. 2026 : avant, Pages publiait même si les tests échouaient).
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -16,18 +20,22 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: node --check dist/sw.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

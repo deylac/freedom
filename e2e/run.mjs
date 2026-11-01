@@ -864,7 +864,7 @@ await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', 
   // Audit F04 : serveurs média injoignables → suppression partielle, la vidéo et sa clé restent suivies.
   await witness.route(/127\.0\.0\.1:300[123]\//, (route) => route.abort('connectionrefused'))
   await witness.getByRole('button', { name: 'Supprimer cette vidéo' }).first().click()
-  await witness.getByText(/Suppression partielle/).waitFor({ timeout: 20_000 })
+  await witness.getByText(/Suppression partielle .*réessayez plus tard/).waitFor({ timeout: 20_000 })
   await witness.getByTestId('deletion-pending').first().waitFor({ timeout: 5_000 })
   await witness.unroute(/127\.0\.0\.1:300[123]\//)
   await witness.getByRole('button', { name: 'Supprimer cette vidéo' }).first().click()

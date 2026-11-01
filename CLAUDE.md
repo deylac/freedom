@@ -12,7 +12,7 @@ Interface, documentation, messages de commit et commentaires : **français**. Id
 ## Commandes
 ```bash
 npm run typecheck      # tsc --noEmit
-npm test               # Vitest (src/**/*.test.ts) — ~110 tests, < 3 s
+npm test               # Vitest (src/**/*.test.ts) — ~130 tests, < 5 s
 npm run build          # dist/ (CSP injectée, sw.js généré)
 npm run e2e            # build e2e + Playwright : relais et 7 serveurs Blossom simulés (~5 min)
 E2E_FULL=1 npm run e2e # même chose avec la vraie limite de 60 s
@@ -29,7 +29,8 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
     `actions_list` (list_workflow_jobs) puis `get_job_logs` (`return_content: true`).
   - **Tests sur téléphone** par l'utilisateur sur https://deylac.github.io/freedom/ ; lui demander
     une capture de Réglages → « Diagnostic du dernier envoi ».
-- Déploiement : **chaque push sur `main`** publie GitHub Pages (`.github/workflows/pages.yml`).
+- Déploiement : **chaque push sur `main` dont la CI réussit** publie GitHub Pages (`pages.yml` attend
+  `ci.yml`, typecheck + tests + build + E2E : compter ~8 min). Une CI rouge = rien n'est publié.
   Suivre l'état via l'API publique : `curl -s https://api.github.com/repos/deylac/freedom/actions/workflows/pages.yml/runs?per_page=1`.
 - Playwright : utiliser le paquet du projet (`playwright@1.63.0`, même version que le Chromium
   préinstallé dans `/opt/pw-browsers`). Ne jamais lancer `playwright install` ici.
@@ -80,6 +81,10 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 13. **Liste des miroirs** (kind 30078, `d=hashwall-mirrors`) : n'accepter que la clé `PROJECT_PUBKEY`.
 14. **Paquet hors ligne** : l'événement et l'autorisation sont signés par l'auteur ; le porteur publie
     l'événement **tel quel** (jamais re-signé ni modifié).
+15. **Stockage local** : une écriture IndexedDB n'est acquise qu'à `oncomplete` (`putJob` renvoie
+    `durable`/`memory`) ; « Tout effacer » ne se termine que sur suppression **effective**. Ne jamais
+    retirer une vidéo de « Mes vidéos » (ni sa clé) tant que sa suppression distante n'est pas confirmée.
+16. **Visages** : masques et confiance du détecteur expirent ensemble, datés à la capture (`face-history.ts`).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la

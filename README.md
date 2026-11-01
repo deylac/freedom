@@ -87,7 +87,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 ## Critères d'acceptation (§8)
 
 `npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et sept
-serveurs Blossom de test (dont : sans `/mirror`, refusant les clés inconnues, répondant 35 s après réception). Dernier résultat : **27/27** (limite de capture raccourcie ;
+serveurs Blossom de test (dont : sans `/mirror`, refusant les clés inconnues, répondant 35 s après réception). Dernier résultat : **29/29** (limite de capture raccourcie ;
 la vraie limite de 60 s a été vérifiée avec `E2E_FULL=1 npm run e2e` lors d'un lot précédent).
 
 | Test du PRD | Vérification automatisée |
@@ -105,6 +105,8 @@ la vraie limite de 60 s a été vérifiée avec `E2E_FULL=1 npm run e2e` lors d'
 | *Bonus* suppression | kind 5 + `DELETE` sur les serveurs, vidéo retirée des murs ouverts |
 | *Résilience* préservation | un spectateur fait copier la vidéo (clé jetable, NIP-94) ; serveurs d'origine bloqués → lecture depuis la copie ; copie automatique après 5 s |
 | *Résilience* adresses de secours | liste signée par la clé du projet affichée (QR), liste d'un imposteur ignorée, bandeau « Aucun relais ne répond » |
+| *Audit* service worker | `sw.js` installé puis application relancée **hors ligne** |
+| *Audit* effacement | « Tout effacer » avec un second onglet ouvert : file d'envoi réellement supprimée |
 | *Résilience* hors ligne | sans réseau : paquet signé ; un tiers le vérifie (fichier altéré refusé) et le publie, la vidéo reste signée par son auteur |
 
 Ce qui n'a pas pu être testé ici (relais/serveurs réels, vrais téléphones) est listé dans

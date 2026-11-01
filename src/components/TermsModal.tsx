@@ -20,7 +20,9 @@ export function TermsModal({ onAccept, onClose }: { onAccept: () => void; onClos
         <ul className="list-disc space-y-1.5 pl-5 text-white/80">
           <li>
             <strong className="text-white">Publication publique et durable.</strong> La vidéo est copiée sur plusieurs
-            serveurs indépendants : une suppression peut être demandée mais jamais garantie.
+            serveurs indépendants, <strong className="text-white">non chiffrée</strong> : tout le monde peut la regarder, hébergeurs
+            compris. L’empreinte et la signature prouvent qu’elle n’a pas été modifiée, pas qu’elle est confidentielle. Une
+            suppression peut être demandée mais jamais garantie.
           </li>
           <li>
             <strong className="text-white">Pensez aux personnes filmées.</strong> Un visage reconnaissable peut les exposer.

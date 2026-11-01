@@ -326,13 +326,28 @@ export class WallStore {
     return at !== undefined && clip.createdAt <= at
   }
 
+  /**
+   * Listes de masquage des sources AUTORISÉES MAINTENANT : un modérateur retiré des réglages perd
+   * immédiatement toute influence, même si ses listes ont déjà été reçues (audit F09).
+   */
+  private activeMuteLists(): MuteList[] {
+    return [...this.muteLists]
+      .filter(([pubkey]) => this.context.moderators.has(pubkey) || pubkey === this.context.self)
+      .map(([, m]) => m.list)
+  }
+
+  /** Clés suivies par les modérateurs actuels (Web of Trust de profondeur 1). */
+  trustedKeys(): Set<string> {
+    return new Set([...this.follows].filter(([pubkey]) => this.context.moderators.has(pubkey)).flatMap(([, f]) => f.pubkeys))
+  }
+
   private computeItems(): WallItem[] {
     const ctx: ModerationContext = {
       wallTag: this.tag,
-      mutes: mergeMuteLists([this.context.localMutes, ...[...this.muteLists.values()].map((m) => m.list)]),
+      mutes: mergeMuteLists([this.context.localMutes, ...this.activeMuteLists()]),
       hiddenKeys: this.context.hiddenKeys,
       moderators: this.context.moderators,
-      trusted: new Set([...this.follows.values()].flatMap((f) => f.pubkeys)),
+      trusted: this.trustedKeys(),
       powBits: this.context.powBits ?? REPORT_POW_BITS,
       threshold: this.context.threshold,
     }

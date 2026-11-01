@@ -536,7 +536,11 @@ export interface JobView {
 type Listener = () => void
 type Lane = 'publish' | 'mirror'
 
-class Publisher {
+type Runner = (job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal) => Promise<void>
+
+export class Publisher {
+  constructor(private readonly runners: Record<Lane, Runner> = { publish: runPublishPhase, mirror: runMirrorPhase }) {}
+
   private jobs = new Map<string, OutboxJob>()
   private progress = new Map<string, Progress>()
   private errors = new Map<string, string>()
@@ -586,8 +590,19 @@ class Publisher {
     void this.pump(lane)
   }
 
+  private busy(id: string): boolean {
+    return (['publish', 'mirror'] as Lane[]).some((lane) => this.active[lane]?.id === id || this.queues[lane].includes(id))
+  }
+
+  /**
+   * Reprise (lancement, retour du réseau). Audit F07 : une tâche déjà connue mais en échec doit
+   * être relancée ; une tâche en cours ou déjà en file ne l'est jamais deux fois.
+   */
   async resumeAll() {
-    for (const job of await listJobs()) if (job.state !== 'done' && !this.jobs.has(job.id)) this.enqueue(job)
+    for (const stored of await listJobs()) {
+      if (stored.state === 'done' || this.busy(stored.id)) continue
+      this.enqueue(this.jobs.get(stored.id) ?? stored)
+    }
   }
 
   retry(id: string) {
@@ -645,12 +660,12 @@ class Publisher {
     }
     try {
       if (lane === 'publish') {
-        await runPublishPhase(job, onProgress, controller.signal)
+        await this.runners.publish(job, onProgress, controller.signal)
         // Visible sur le mur : la réplication continue sur l'autre voie.
         this.progress.delete(id)
         this.enqueue(job)
       } else {
-        await runMirrorPhase(job, onProgress, controller.signal)
+        await this.runners.mirror(job, onProgress, controller.signal)
         const finished: JobView = {
           id,
           tag: job.tag,

@@ -17,5 +17,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: node --check dist/sw.js
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e

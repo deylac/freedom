@@ -226,6 +226,38 @@ describe('WallStore', () => {
     expect(s.rejected).toBeGreaterThan(0)
   })
 
+  it('audit F09 : retirer un modérateur retire immédiatement ses listes et ses suivis', () => {
+    const mod = generateSecretKey()
+    const ctx = { ...emptyContext(), moderators: new Set([getPublicKey(mod)]) }
+    const s = new WallStore('mur', ctx)
+    s.ingest(video(alice, 1))
+    s.ingest(video(bob, 2))
+    s.ingest(finalizeEvent({ kind: 10000, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(alice)]] }, mod))
+    expect(s.getSnapshot().items.map((i) => i.clip.pubkey)).toEqual([getPublicKey(bob)])
+    // Son suivi rendait bob « de confiance » pour les signalements.
+    s.ingest(finalizeEvent({ kind: 3, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(bob)]] }, mod))
+    expect(s.trustedKeys().has(getPublicKey(bob))).toBe(true)
+
+    s.setContext({ ...ctx, moderators: new Set() })
+    expect(s.getSnapshot().items.map((i) => i.clip.pubkey).sort()).toEqual([getPublicKey(alice), getPublicKey(bob)].sort())
+    expect(s.trustedKeys().has(getPublicKey(bob))).toBe(false)
+  })
+
+  it('audit F09 : les masquages locaux et ceux d’un autre modérateur restent appliqués', () => {
+    const m1 = generateSecretKey()
+    const m2 = generateSecretKey()
+    const ctx = { ...emptyContext(), moderators: new Set([getPublicKey(m1), getPublicKey(m2)]), localMutes: { ...emptyMuteList(), words: ['interdit'] } }
+    const s = new WallStore('mur', ctx)
+    s.ingest(video(alice, 1))
+    s.ingest(video(bob, 2, { title: 'mot interdit' }))
+    const carol = generateSecretKey()
+    s.ingest(video(carol, 3))
+    s.ingest(finalizeEvent({ kind: 10000, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(alice)]] }, m1))
+    s.ingest(finalizeEvent({ kind: 10000, created_at: nowSeconds(), content: '', tags: [['p', getPublicKey(carol)]] }, m2))
+    s.setContext({ ...ctx, moderators: new Set([getPublicKey(m2)]) })
+    expect(s.getSnapshot().items.map((i) => i.clip.pubkey)).toEqual([getPublicKey(alice)])
+  })
+
   it('plafonne le nombre de clips par auteur (anti-inondation)', () => {
     const s = new WallStore('mur', emptyContext())
     for (let i = 1; i <= 30; i++) s.ingest(video(alice, i))
