@@ -155,3 +155,11 @@ qui échoue sur l'ancien code.
 | F09 | Retirer un modérateur des réglages laissait ses listes de masquage et ses suivis actifs tant que le mur restait ouvert. | ✅ Listes et suivis filtrés à chaque calcul selon les modérateurs **actuels** ; masquages locaux et autres modérateurs conservés. |
 | Livraison | Pages publiait à chaque push, même avec des tests en échec. | ✅ `pages.yml` ne se déclenche qu'après la réussite de la CI sur le même commit ; `node --check dist/sw.js` en CI et au déploiement. |
 | Confidentialité | Rien n'indiquait clairement que les vidéos ne sont pas chiffrées. | ✅ Conditions d'utilisation : « publication publique, non chiffrée ; empreinte et signature = intégrité, pas confidentialité ». |
+
+## 11. Test réel iPhone du 1ᵉʳ nov. (soir)
+
+| # | Constat | Traitement |
+|---|---|---|
+| 11.1 | **Vidéo publiée avec un visage net** : le filtre « Visages floutés » était désactivé par défaut, et sur téléphone son bouton n'affichait qu'une icône — rien n'indiquait qu'aucun floutage n'était appliqué. | ✅ Visages floutés **par défaut**, libellé toujours visible (« Visages » / « Sans flou » / « Tout flou »), dernier choix mémorisé. E2E « Par défaut, la caméra s'ouvre avec les visages floutés » (échouait sur l'ancien code). |
+| 11.2 | En mode avion, chaque miroir était déclaré en échec avec « en-têtes CORS absents » et mis de côté 30 min. | ✅ Hors ligne : « Pas de réseau », aucun serveur pénalisé, reprise automatique au retour du réseau (F07). Vérifié dans l'E2E « Hors ligne ». |
+| 11.3 | Captures montrant 6 relais et l'ancienne liste de serveurs : l'onglet affichait probablement une version antérieure (onglet ouvert avant le déploiement). | ✅ La version affichée dans Réglages inclut désormais le commit (« 0.1.0 (abc1234) »). Recharger l'onglet après chaque déploiement. |

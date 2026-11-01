@@ -16,6 +16,8 @@ type Health = Record<string, { until: number; reason: string }>
 const read = (): Health => readJSON<Health>(KEY, {})
 
 export function penalize(server: string, reason: string, now = Date.now()): void {
+  // Appareil hors ligne : le serveur n'y est pour rien (constat réel en mode avion).
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
   const health = read()
   health[server] = { until: now + PENALTY_MS, reason }
   writeJSON(KEY, health)

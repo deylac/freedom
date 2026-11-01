@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MAX_CLIP_MS, MAX_UPLOAD_BYTES } from '../config'
+import { updateSettings } from '../lib/storage/settings'
 import { useSettings, useWakeLock } from '../hooks/basics'
 import { formatBytes, formatDuration } from '../lib/format'
 import { detectCaptureSupport } from '../lib/media/mime'
@@ -46,6 +47,13 @@ function Ring({ remaining, total }: { remaining: number; total: number }) {
   )
 }
 
+/** Libellés courts, toujours visibles (même sur un petit écran) : l'état du filtre ne doit pas être deviné. */
+const FILTER_SHORT: Record<FilterMode, string> = {
+  none: 'Sans flou',
+  faces: 'Visages',
+  pixelate: 'Tout flou',
+}
+
 const FILTER_LABEL: Record<FilterMode, string> = {
   none: 'Sans filtre',
   faces: 'Visages floutés',
@@ -62,7 +70,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   const [error, setError] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [recording, setRecording] = useState<Recording | null>(null)
-  const [filter, setFilter] = useState<FilterMode>('none')
+  const [filter, setFilter] = useState<FilterMode>(settings.captureFilter)
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [voice, setVoice] = useState<'natural' | 'robot'>('natural')
   const [faceStatus, setFaceStatus] = useState<FaceStatus>({ state: 'off', trusted: false, count: 0 })
@@ -80,6 +88,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     }
     const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality)
     s.maxMs = total
+    s.filter = filter
     session.current = s
     s.open()
       .then(() => setPhase((p) => (p === 'starting' ? 'ready' : p)))
@@ -152,6 +161,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     const order: FilterMode[] = ['none', 'faces', 'pixelate']
     const next = order[(order.indexOf(filter) + 1) % order.length]
     setFilter(next)
+    updateSettings({ captureFilter: next })
     if (session.current) session.current.filter = next
   }
 
@@ -220,7 +230,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
             <div className="flex gap-2">
               <button onClick={cycleFilter} aria-label={`Filtre d'anonymisation : ${FILTER_LABEL[filter]}`} className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold ${filter === 'none' ? 'bg-black/40' : 'bg-accent text-night'}`} disabled={phase === 'starting' || phase === 'error'}>
                 <IconFace size={18} />
-                <span className="hidden sm:inline">{FILTER_LABEL[filter]}</span>
+                <span>{FILTER_SHORT[filter]}</span>
               </button>
               <button
                 onClick={toggleVoice}

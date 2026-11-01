@@ -155,7 +155,8 @@ export function describeError(err: unknown): string {
       case 'timeout':
         return `pas de réponse (délai dépassé)${reason}`
       case 'network':
-        return 'réponse illisible (en-têtes CORS absents) ou connexion impossible'
+        // Constat réel (mode avion) : sans réseau, « CORS absents » égarait le diagnostic.
+        return isOffline() ? 'pas de réseau (appareil hors ligne)' : 'réponse illisible (en-têtes CORS absents) ou connexion impossible'
       case 'mismatch':
         return `le serveur a modifié le fichier${reason}`
       case 'aborted':
@@ -163,6 +164,13 @@ export function describeError(err: unknown): string {
     }
   }
   return err instanceof Error ? err.message : String(err)
+}
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
+
+/** Hors ligne : inutile d'accuser chaque serveur ; la file reprend au retour du réseau (événement online). */
+function assertOnline() {
+  if (isOffline()) throw new Error('Pas de réseau : l’envoi reprendra automatiquement au retour de la connexion.')
 }
 
 function diag(job: OutboxJob, server: string, step: Diagnostic['step'], ok: boolean, detail: string) {
@@ -353,6 +361,7 @@ async function prepare(job: OutboxJob): Promise<JobContext> {
  * fin de cette étape ; elle n'attend jamais la réplication d'une autre vidéo.
  */
 export async function runPublishPhase(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<void> {
+  assertOnline()
   job.attempts++
   if (!job.primary) job.diagnostics = []
   const { signer, token, targets } = await prepare(job)
@@ -398,6 +407,7 @@ const MAX_FALLBACKS = 4
  *  3. Publication v2 (même tag d) avec les `fallback`, puis liste kind 10063.
  */
 export async function runMirrorPhase(job: OutboxJob, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<void> {
+  assertOnline()
   const { signer, token, targets } = await prepare(job)
   job.diagnostics = (job.diagnostics ?? []).filter((d) => d.step !== 'miroir')
   // Horodatage manqué sur la voie urgente (calendriers lents) : nouvel essai, inclus dans la v2.

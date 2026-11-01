@@ -34,6 +34,11 @@ export interface Settings {
   otsCalendars: string[]
   /** Explorateurs Bitcoin (API Esplora) utilisés pour vérifier les preuves. */
   btcExplorers: string[]
+  /**
+   * Filtre d'anonymisation à l'ouverture de la caméra (dernier choix mémorisé). Visages floutés par
+   * défaut : constat réel du 1ᵉʳ nov., une vidéo est partie avec un visage net faute d'avoir activé le filtre.
+   */
+  captureFilter: 'none' | 'faces' | 'pixelate'
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -49,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   termsAcceptedVersion: 0,
   installBannerDismissed: false,
   autoPreserve: true,
+  captureFilter: 'faces',
   otsCalendars: DEFAULT_OTS_CALENDARS,
   btcExplorers: DEFAULT_BTC_EXPLORERS,
 }

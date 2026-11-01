@@ -51,6 +51,7 @@ const settings = {
   otsCalendars: [OTS.calendarUrl],
   btcExplorers: [OTS.explorerUrl],
   autoPreserve: false,
+  captureFilter: 'none', // les scénarios historiques filment sans filtre ; le défaut réel est testé à part
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +469,11 @@ await step('Hors ligne : paquet signé confié à un proche, vérifié puis publ
   await witnessPage.getByRole('button', { name: /Filmer pour #horsligne/ }).waitFor()
   await witnessPage.context().setOffline(true)
   await recordClip(witnessPage, 'horsligne')
-  await witnessPage.getByTestId('bundle-open').click({ timeout: 30_000 })
+  await witnessPage.getByTestId('bundle-open').waitFor({ timeout: 30_000 })
+  // Constat réel (mode avion) : le diagnostic parlait de « CORS absents » au lieu de l'absence de réseau.
+  await witnessPage.getByText(/Pas de réseau/).first().waitFor({ timeout: 5_000 })
+  assert.ok(!(await witnessPage.getByText(/CORS absents/).count()), 'diagnostic trompeur hors ligne')
+  await witnessPage.getByTestId('bundle-open').click()
   await witnessPage.getByTestId('bundle-name').waitFor({ timeout: 10_000 })
   const [download] = await Promise.all([witnessPage.waitForEvent('download'), witnessPage.getByRole('button', { name: /Enregistrer le fichier/ }).click()])
   mkdirSync(join(root, '..', 'e2e', 'artifacts'), { recursive: true })
@@ -587,6 +592,29 @@ await step('Tout effacer avec un second onglet ouvert : la file d’envoi est r�
   )
   assert.deepEqual(remaining, [], `données restantes après effacement : ${remaining}`)
   await context.close()
+})
+
+// ---------------------------------------------------------------------------
+// Constat réel (iPhone, 1ᵉʳ nov.) : vidéo publiée avec un visage net, le filtre étant désactivé par défaut.
+
+await step('Par défaut, la caméra s’ouvre avec les visages floutés (libellé visible sur mobile)', async () => {
+  const { captureFilter: _ignored, ...defaults } = settings
+  const page = await newPage({ mobile: true, init: { ...defaults, termsAcceptedVersion: 1 } })
+  await page.goto(`${APP}#defaut`)
+  await page.getByRole('button', { name: /Filmer pour #defaut/ }).click()
+  const toggle = page.getByRole('button', { name: /Filtre d'anonymisation/ })
+  await toggle.waitFor({ timeout: 10_000 })
+  assert.match(await toggle.getAttribute('aria-label'), /Visages floutés/)
+  assert.match(await toggle.innerText(), /Visages/, 'libellé invisible sur mobile')
+  await page.getByTestId('face-status').waitFor({ timeout: 5_000 })
+  // Le choix est mémorisé : « Sans filtre » reste choisi à la prochaine ouverture.
+  await toggle.click()
+  await toggle.click()
+  assert.match(await toggle.getAttribute('aria-label'), /Sans filtre|Aucun/)
+  await page.getByRole('button', { name: 'Fermer la caméra' }).click()
+  await page.getByRole('button', { name: /Filmer pour #defaut/ }).click()
+  assert.match(await page.getByRole('button', { name: /Filtre d'anonymisation/ }).getAttribute('aria-label'), /Sans filtre|Aucun/)
+  await page.context().close()
 })
 
 // ---------------------------------------------------------------------------
