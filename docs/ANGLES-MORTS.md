@@ -111,3 +111,16 @@ Légende : ✅ traité dans le code · ⚠️ atténué, limite résiduelle · �
 - Horodatage OpenTimestamps (NIP-03) pour renforcer la valeur probante.
 - Envoi segmenté / HLS : inutile pour 60 s, nécessaire si la durée augmente.
 - **Choisir une licence** (le PRD parle d'open source ; AGPL-3.0 conseillée pour qu'un fork hébergé reste ouvert) et la publier.
+
+## 8. Constats du lot « fonctionnalités avancées » (1ᵉʳ nov. 2026)
+
+| # | Constat | Traitement |
+|---|---|---|
+| 8.1 | **MediaPipe envoie une télémétrie à Google** (`odml.pa.googleapis.com`, toutes les 60 s) : elle aurait révélé l'IP de quiconque active le floutage. Un worker chargé depuis un fichier n'hérite pas de la CSP de la page. | ✅ URL neutralisée au build (le build échoue si elle change), worker interdisant toute requête hors origine, test E2E « aucune requête externe ». |
+| 8.2 | Les modèles officiels MediaPipe ne sont pas sur npm ; ceux de l'ancien paquet n'ont pas les métadonnées exigées ; l'ancien paquet exigerait `'unsafe-eval'`. | ✅ Modèle officiel récupéré par GitHub Actions (`fetch-models.yml`), SHA-256 figé et vérifié à l'usage. |
+| 8.3 | Détection : sans découpage, rien sous 61 px de large ; avec tuiles de 360 px, jusqu'à ~23 px. Profils et visages masqués restent difficiles. | ⚠️ Tuiles + persistance + marges ; échec fermé (pixelisation totale) tant que l'image n'est pas entièrement analysée. iOS < 17 : pas d'`OffscreenCanvas` WebGL → pixelisation totale. |
+| 8.4 | **NIP-03 inadapté** : il horodate l'id d'un événement ; nos événements adressables sont remplacés (v1 → v2), la preuve viserait un événement disparu. NIP-03 est en outre « unrecommended ». | ✅ Horodatage de l'empreinte du **fichier**, preuve `.ots` standard dans `imeta` (vérifiable avec `ots verify`). |
+| 8.5 | Une preuve OTS contient des URL de calendriers : la suivre aveuglément permettrait de pister l'IP des spectateurs. | ✅ Liste blanche de calendriers ; vérification uniquement sur clic. |
+| 8.6 | Les calendriers OTS renvoient leurs 404 sans CORS (illisibles) mais leurs 200 avec CORS : la mise à niveau depuis un navigateur est possible (vérifié sur une vraie preuve de 2016). | ✅ |
+| 8.7 | Voix : un décalage de hauteur serait réversible. | ✅ Vocodeur à porteuse fixe ; mesuré : sortie à 110 Hz quelle que soit l'entrée. Limite : mots, accent et débit restent identifiants. |
+| 8.8 | Preuve de travail des signalements : 20 bits ≈ quelques secondes sur téléphone mais une fraction de seconde sur un PC. | ⚠️ Ralentisseur seulement ; la protection réelle vient des modérateurs et de leurs contacts. |

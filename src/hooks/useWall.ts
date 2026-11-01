@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { Filter } from 'nostr-tools/filter'
 import { WALL_KINDS } from '../config'
-import { clipKeyFromPointer, KIND_DELETION, KIND_MUTE_LIST, KIND_REPORT, KIND_SERVER_LIST } from '../lib/nostr/events'
+import { clipKeyFromPointer, KIND_DELETION, KIND_FOLLOWS, KIND_MUTE_LIST, KIND_REPORT, KIND_SERVER_LIST } from '../lib/nostr/events'
 import { LiveSubscription, queryOnce } from '../lib/nostr/pool'
 import { identityPubkey } from '../lib/nostr/signer'
 import { hiddenKeys, localMutes } from '../lib/storage/personal'
@@ -14,6 +14,21 @@ const playable = new Map<string, boolean>()
 export function canPlay(mime: string): boolean {
   if (!playable.has(mime)) playable.set(mime, !!probe && probe.canPlayType(mime) !== '')
   return playable.get(mime)!
+}
+
+/** Historique initial ; les tests de bout en bout le réduisent pour éprouver la pagination. */
+function historyLimit(): number {
+  if (import.meta.env.MODE === 'e2e') {
+    const n = Number(localStorage.getItem('hw:e2e:wallLimit'))
+    if (n > 0) return n
+  }
+  return 200
+}
+
+export function chunks<T>(values: T[], size = 150): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size))
+  return out
 }
 
 const EMPTY: WallSnapshot = { items: [], loading: false, version: 0 }
@@ -62,9 +77,11 @@ export function useWall(tag: string | null, focusPointer?: string) {
   useEffect(() => {
     if (!store || !tag) return
     store.setLoading(true)
-    const filters: Filter[] = [{ kinds: WALL_KINDS, '#t': [tag], limit: 200 }]
+    const filters: Filter[] = [{ kinds: WALL_KINDS, '#t': [tag], limit: historyLimit() }]
     const muteAuthors = [...new Set([...settings.moderators, identityPubkey()])]
     filters.push({ kinds: [KIND_MUTE_LIST], authors: muteAuthors })
+    // Abonnements des modérateurs : leurs contacts sont des signaleurs de confiance.
+    if (settings.moderators.length) filters.push({ kinds: [KIND_FOLLOWS], authors: settings.moderators })
     const sub = new LiveSubscription({
       relays: settings.relays,
       filters,
@@ -96,10 +113,11 @@ export function useWall(tag: string | null, focusPointer?: string) {
     if (!store || !debouncedKey) return
     const t = JSON.parse(debouncedKey) as ReturnType<WallStore['annotationTargets']>
     const filters: Filter[] = []
-    if (t.hashes.length) filters.push({ kinds: [KIND_REPORT], '#x': t.hashes })
-    if (t.ids.length) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#e': t.ids })
-    if (t.addresses.length) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#a': t.addresses })
-    if (t.pubkeys.length) filters.push({ kinds: [KIND_SERVER_LIST], authors: t.pubkeys })
+    // Paquets de 150 valeurs : certains relais refusent les filtres trop longs.
+    for (const hashes of chunks(t.hashes)) filters.push({ kinds: [KIND_REPORT], '#x': hashes })
+    for (const ids of chunks(t.ids)) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#e': ids })
+    for (const addresses of chunks(t.addresses)) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#a': addresses })
+    for (const pubkeys of chunks(t.pubkeys)) filters.push({ kinds: [KIND_SERVER_LIST], authors: pubkeys })
     if (filters.length === 0) return
     const sub = new LiveSubscription({
       relays: settings.relays,
@@ -136,6 +154,19 @@ export function useWall(tag: string | null, focusPointer?: string) {
     }
   }, [store, focusPointer, settings.relays])
 
+  // --- « Vidéos plus anciennes » : page précédente via `until` ---
+  const [older, setOlder] = useState<'idle' | 'loading' | 'done'>('idle')
+  useEffect(() => setOlder('idle'), [store])
+  const loadOlder = async () => {
+    if (!store || !tag || older === 'loading') return
+    setOlder('loading')
+    const before = store.size
+    const until = store.oldestCreatedAt()
+    const events = await queryOnce(settings.relays, { kinds: WALL_KINDS, '#t': [tag], limit: 100, ...(until ? { until: until - 1 } : {}) }, 6000)
+    events.forEach((e) => store.ingest(e))
+    setOlder(store.size > before ? 'idle' : 'done')
+  }
+
   const focusKey = focusPointer ? clipKeyFromPointer(focusPointer) : null
-  return { store, snapshot, focusKey }
+  return { store, snapshot, focusKey, older, loadOlder }
 }

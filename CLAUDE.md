@@ -15,6 +15,7 @@ npm test               # Vitest (src/**/*.test.ts) — ~60 tests, < 2 s
 npm run build          # dist/ (CSP injectée, sw.js généré)
 npm run e2e            # build e2e + Playwright : relais et 5 serveurs Blossom simulés (~2 min)
 E2E_FULL=1 npm run e2e # même chose avec la vraie limite de 60 s
+E2E_ONLY="Visages" node e2e/run.mjs  # un seul scénario indépendant (après npm run build:e2e)
 ```
 Avant tout push : `typecheck`, `test`, `e2e` verts.
 
@@ -66,12 +67,18 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 8. Ne jamais émettre de tags Proofmode (`proof-version`, `verification-level`) : impossible à prouver
    depuis un navigateur.
 9. Base relative (`base: './'`) et routage par fragment : l'app doit marcher sous `/ipfs/<cid>/`.
+10. **MediaPipe sans télémétrie** : ne jamais retirer `mediapipeNoTelemetry` (vite.config.ts) ni le
+    garde-fou réseau de `face-worker.ts`. Toute montée de version de `@mediapipe/tasks-vision` doit être
+    auditée (le build échoue si l'URL de télémétrie change).
+11. OpenTimestamps : on horodate l'empreinte du **fichier** ; ne contacter que les calendriers de la
+    liste blanche (`settings.otsCalendars`) ; jamais de vérification sans action de l'utilisateur.
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la
   correction (vérifier l'échec avec `git stash push <fichiers>` → e2e → `git stash pop`).
 - Simulateurs dans `e2e/` : `mock-relay.mjs` (NIP-01), `mock-blossom.mjs` (options `mirror`,
-  `refuseUploads`, `delayMs`). En ajouter une option plutôt que de modifier le comportement par défaut.
+  `refuseUploads`, `delayMs`), `mock-ots.mjs` (calendrier + explorateur Bitcoin). Fausse caméra avec
+  visages : `e2e/fixtures/face.jpg` (domaine public) converti en Y4M au lancement. En ajouter une option plutôt que de modifier le comportement par défaut.
 - Mettre à jour `docs/ANGLES-MORTS.md` (constats réels) et `docs/FEUILLE-DE-ROUTE.md` (cases cochées)
   dans le même commit que le code.
 - Commits en français, petits, avec les lignes d'attribution demandées par la session.

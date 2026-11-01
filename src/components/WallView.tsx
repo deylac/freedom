@@ -12,6 +12,8 @@ import type { SourceState } from './ResilientVideo'
 
 type Target = { clip: Clip; source: SourceState | null }
 
+const shownCount = (n: number) => n > 0
+
 /** Fige l'ordre affiché quand l'utilisateur n'est pas en haut : les nouveautés attendent derrière une pastille. */
 function useFrozenOrder(items: WallItem[], live: boolean) {
   const keys = items.map((i) => i.clip.key).join('|')
@@ -66,6 +68,7 @@ function FeedView({
   onMenu,
   onResilience,
   scrollToTopSignal,
+  footer,
 }: {
   items: WallItem[]
   tag: string
@@ -75,6 +78,7 @@ function FeedView({
   onMenu: (t: Target) => void
   onResilience: (t: Target) => void
   scrollToTopSignal?: number
+  footer?: React.ReactNode
 }) {
   const container = useRef<HTMLDivElement>(null)
   const [activeKey, setActiveKey] = useState<string | null>(startKey ?? null)
@@ -154,6 +158,7 @@ function FeedView({
           onResilience={(clip, source) => onResilience({ clip, source })}
         />
       ))}
+      {footer && <section className="flex h-[40dvh] snap-start items-center justify-center bg-night">{footer}</section>}
     </div>
   )
 }
@@ -175,7 +180,20 @@ export function WallView({
   onQr: () => void
   onSettings: () => void
 }) {
-  const { store, snapshot, focusKey } = useWall(tag, focusPointer)
+  const { store, snapshot, focusKey, older, loadOlder } = useWall(tag, focusPointer)
+  const olderButton =
+    shownCount(snapshot.items.length) && older !== 'done' ? (
+      <button
+        onClick={() => void loadOlder()}
+        disabled={older === 'loading'}
+        className="mx-auto my-6 block rounded-full border border-line bg-surface px-5 py-2.5 text-sm font-semibold text-white hover:border-accent disabled:opacity-50"
+        data-testid="load-older"
+      >
+        {older === 'loading' ? 'Recherche…' : 'Vidéos plus anciennes'}
+      </button>
+    ) : older === 'done' ? (
+      <p className="my-6 text-center text-xs text-muted">Début du mur atteint.</p>
+    ) : null
   const desktop = useMediaQuery('(min-width: 768px)')
   const [menu, setMenu] = useState<Target | null>(null)
   const [resilience, setResilience] = useState<Target | null>(null)
@@ -239,6 +257,7 @@ export function WallView({
               onResilience={(clip, source) => setResilience({ clip, source })}
             />
           ))}
+          <div className="col-span-full">{olderButton}</div>
         </main>
       ) : (
         <FeedView
@@ -250,6 +269,7 @@ export function WallView({
           onMenu={setMenu}
           onResilience={setResilience}
           scrollToTopSignal={topSignal}
+          footer={olderButton}
         />
       )}
 

@@ -362,9 +362,12 @@ await step('Signalement : kind 1984 (e, p, x) + PUT /report, vidéo masquée', a
   await viewer.getByRole('button', { name: 'Signaler ce contenu' }).click()
   await viewer.getByRole('button', { name: /Spam/ }).click()
   await viewer.locator('[data-clip-key]').first().waitFor({ state: 'detached', timeout: 5_000 })
-  const report = relay.received.find((e) => e.kind === 1984)
+  const report = await waitFor(() => relay.received.find((e) => e.kind === 1984), 60_000, 'signalement miné')
   assert.ok(report, 'aucun kind 1984 publié')
   for (const t of ['e', 'p', 'x']) assert.equal(tagOf(report, t)?.[2], 'spam', `tag ${t} sans motif`)
+  // Preuve de travail NIP-13 ≥ 20 bits (anti-Sybil) : 5 chiffres hexadécimaux nuls en tête de l'id.
+  assert.match(report.id, /^00000/, `preuve de travail insuffisante : ${report.id.slice(0, 8)}`)
+  assert.ok(tagOf(report, 'nonce'), 'tag nonce absent')
   assert.ok(tagOf(report, 'a'), 'tag a absent')
   const servers = [A, B, C].filter((s) => s.reports.length > 0).length
   assert.equal(servers, 3, `PUT /report reçu par ${servers}/3 serveurs`)
@@ -417,6 +420,19 @@ await step('Deux voies : un nouveau clip n’attend pas la réplication du préc
   assert.ok(imeta(v2).fallback.some((u) => u.includes(':3005/')), 'miroir lent absent des fallback')
   await page.context().close()
   return `Y publiée ${((relay.received.indexOf(v2) - relay.received.indexOf(y)) > 0 ? 'avant' : 'après')} la fin de la réplication de X`
+})
+
+await step('Pagination : « Vidéos plus anciennes » charge la page précédente', async () => {
+  const page = await newPage({ extra: { 'hw:e2e:wallLimit': '1' } })
+  await page.goto(`${APP}#voies`)
+  await page.locator('[data-clip-key]').first().waitFor({ timeout: 10_000 })
+  await page.waitForTimeout(1500)
+  assert.equal(await page.locator('[data-clip-key]').count(), 1, 'l’historique devrait être limité à 1')
+  await page.getByTestId('load-older').click()
+  await page.locator('[data-clip-key]').nth(1).waitFor({ timeout: 10_000 })
+  await page.getByTestId('load-older').click()
+  await page.getByText('Début du mur atteint.').waitFor({ timeout: 10_000 })
+  await page.context().close()
 })
 
 // ---------------------------------------------------------------------------

@@ -6,16 +6,20 @@ et les critères d'acceptation. Mettre à jour les cases à cocher dans le commi
 
 Effort conseillé : 🟢 moyen suffit (tout est spécifié) · 🟠 élevé conseillé (incertitudes techniques).
 
-| # | Tâche | Priorité | Effort |
+| # | Tâche | Priorité | État |
 |---|---|---|---|
-| 1 | Protocole de validation sur vrais appareils | P0 | 🟢 |
-| 2 | Compléter la sonde (`/report`, CORS des erreurs, `Sunset`) | P0 | 🟢 |
-| 3 | Voix anonymisée (FR-08) — vocodeur à canaux | P1 | 🟢 |
-| 4 | Signalements résistants aux fausses clés (Web of Trust + preuve de travail) | P1 | 🟢 |
-| 5 | Floutage des visages sur iPhone (MediaPipe) | P1 | 🟠 |
-| 6 | « Charger plus » (pagination des murs anciens) | P2 | 🟢 |
-| 7 | Horodatage OpenTimestamps (NIP-03) | P2 | 🟠 |
+| 1 | Protocole de validation sur vrais appareils | P0 | ⏳ à faire par l'utilisateur |
+| 2 | Compléter la sonde (`/report`, CORS des erreurs, `Sunset`, calendriers, explorateurs) | P0 | ✅ livré |
+| 3 | Voix anonymisée (FR-08) — vocodeur à canaux | P1 | ✅ livré (`media/voice.ts`, mesure hors ligne) |
+| 4 | Signalements résistants aux fausses clés (Web of Trust + preuve de travail) | P1 | ✅ livré |
+| 5 | Floutage des visages sur iPhone (MediaPipe) | P1 | ✅ livré (modèle *full range* + tuiles) |
+| 6 | « Charger plus » (pagination des murs anciens) | P2 | ✅ livré |
+| 7 | Horodatage OpenTimestamps | P2 | ✅ livré — sur l'empreinte du **fichier**, pas NIP-03 (voir ANGLES-MORTS §8) |
+| 8 | **Résilience maximale** (miroirs, réplication par les spectateurs, hors ligne, P2P) | P0 | 📄 étude : `docs/RESILIENCE.md` |
 | — | Décisions hors code (licence, juridique, collectif de modération, domaine) | P0 | — |
+
+> Les sections 3 à 7 ci-dessous décrivent la conception d'origine ; l'implémentation livrée la suit,
+> aux écarts près signalés dans `docs/ANGLES-MORTS.md` §8.
 
 ---
 
