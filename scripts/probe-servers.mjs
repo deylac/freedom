@@ -9,7 +9,12 @@ const ORIGIN = process.env.PROBE_ORIGIN ?? 'https://deylac.github.io'
 const SERVERS = (process.env.PROBE_SERVERS ??
   'https://blossom.nostr.build https://blossom.primal.net https://nostr.download https://blosstr.com https://cdn.nostrcheck.me https://blossom.band https://24242.io https://blossom.yakihonne.com https://files.sovbit.host https://cdn.satellite.earth').split(/\s+/)
 const RELAYS = (process.env.PROBE_RELAYS ??
-  'wss://relay.damus.io wss://nos.lol wss://relay.primal.net wss://nostr.mom wss://relay.nostr.net wss://offchain.pub').split(/\s+/)
+  'wss://relay.damus.io wss://nos.lol wss://relay.primal.net wss://nostr.mom wss://relay.nostr.net wss://offchain.pub ' +
+  // candidats pour étoffer la liste par défaut (juridictions variées)
+  'wss://relay.snort.social wss://nostr-pub.wellorder.net wss://relay.nostr.bg wss://nostr.oxtr.dev wss://relay.divine.video ' +
+  'wss://nostr.bitcoiner.social wss://relay.0xchat.com wss://nostr.einundzwanzig.space wss://relay.nostr.wirednet.jp ' +
+  'wss://nostr.wine wss://relay.nostr.band wss://nostr.fmt.wiz.biz wss://relay.nostrplebs.com wss://nostr-relay.derekross.me ' +
+  'wss://relay.fountain.fm wss://nostr.data.haus wss://relay.lumina.rocks wss://nostr.lu.ke wss://relay.orangepill.ovh').split(/\s+/)
 const TEST_SHA = process.env.PROBE_SHA ?? '24c0b651b034d1948aafcc83095d49db1add67200a788027c4757843aabecdd4'
 const TEST_TAG = process.env.PROBE_TAG ?? 'testhashwall'
 const FAKE_SHA = 'f'.repeat(63) + '0'
@@ -100,6 +105,7 @@ async function probeRelay(url) {
     const t0 = Date.now()
     const lines = [`=== ${url}`, `  NIP-11 ${fmt(info)}`]
     let count = 0
+    let shorts = 0
     let done = false
     const finish = (msg) => {
       if (done) return
@@ -115,13 +121,15 @@ async function probeRelay(url) {
     ws.on('open', () => {
       lines.push(`  connecté en ${Date.now() - t0} ms`)
       ws.send(JSON.stringify(['REQ', 'p', { kinds: [34236], '#t': [TEST_TAG], limit: 20 }]))
+      ws.send(JSON.stringify(['REQ', 'q', { kinds: [34236], limit: 5 }]))
     })
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw.toString())
-      if (msg[0] === 'EVENT') count++
+      if (msg[0] === 'EVENT' && msg[1] === 'p') count++
+      else if (msg[0] === 'EVENT' && msg[1] === 'q') shorts++
       else if (msg[0] === 'EOSE') {
         clearTimeout(timer)
-        finish(`EOSE en ${Date.now() - t0} ms : ${count} vidéo(s) #${TEST_TAG}`)
+        finish(`EOSE en ${Date.now() - t0} ms : ${count} vidéo(s) #${TEST_TAG}, ${shorts} vidéo(s) courtes au total (≤5)`)
       } else if (msg[0] === 'CLOSED' || msg[0] === 'NOTICE' || msg[0] === 'AUTH') lines.push(`  ${msg[0]} ${JSON.stringify(msg.slice(1))}`)
     })
     ws.on('error', (err) => {
