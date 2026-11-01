@@ -72,7 +72,9 @@ export function PublishTray({ onBundle }: { onBundle?: (id: string) => void }) {
                   {done
                     ? `${ttw ? `envoi ${ttw} s · ` : ''}${job.mirrors} miroir${job.mirrors > 1 ? 's' : ''}${refusals ? ` · ${refusals} refus` : ''}`
                     : failed
-                      ? 'Conservée sur l’appareil : nouvel essai possible.'
+                      ? job.durable
+                        ? 'Conservée sur l’appareil : nouvel essai possible.'
+                        : 'NON sauvegardée sur l’appareil : ne fermez pas cet onglet.'
                       : pct !== null
                         ? `${pct} % · ${formatBytes(p.sent!)} / ${formatBytes(p.total!)}`
                         : job.state === 'published'

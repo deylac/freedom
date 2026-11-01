@@ -57,16 +57,56 @@ const DB_NAME = 'hashwall'
 const STORE = 'outbox'
 
 const memory = new Map<string, OutboxJob>()
+/** Tâches dont la dernière écriture est confirmée sur disque (transaction terminée). */
+const durable = new Set<string>()
 let dbPromise: Promise<IDBDatabase | null> | null = null
+/** Effacement demandé (ici ou dans un autre onglet) : plus aucune écriture ne doit recréer la base. */
+let wiped = false
+const wipeListeners = new Set<() => void>()
+
+// Coordination entre onglets : un effacement dans un onglet arrête les écritures des autres.
+const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('hashwall-outbox') : null
+if (channel) {
+  channel.onmessage = (e: MessageEvent) => {
+    if (e.data !== 'wipe') return
+    wiped = true
+    memory.clear()
+    durable.clear()
+    void closeDb()
+    wipeListeners.forEach((l) => l())
+  }
+}
+
+/** Appelé quand un AUTRE onglet efface les données (l'appelant doit arrêter ses envois et recharger). */
+export function onRemoteWipe(listener: () => void): () => void {
+  wipeListeners.add(listener)
+  return () => wipeListeners.delete(listener)
+}
+
+async function closeDb() {
+  const p = dbPromise
+  dbPromise = null
+  const db = await p?.catch(() => null)
+  db?.close()
+}
 
 function openDb(): Promise<IDBDatabase | null> {
+  if (wiped) return Promise.resolve(null)
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === 'undefined' || isSharedOriginGateway()) return resolve(null)
     try {
       const req = indexedDB.open(DB_NAME, 1)
       req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' })
-      req.onsuccess = () => resolve(req.result)
+      req.onsuccess = () => {
+        const db = req.result
+        // Un autre onglet supprime ou met à niveau la base : on libère la connexion (audit F03).
+        db.onversionchange = () => {
+          db.close()
+          dbPromise = null
+        }
+        resolve(db)
+      }
       req.onerror = () => resolve(null)
       req.onblocked = () => resolve(null)
     } catch {
@@ -76,34 +116,63 @@ function openDb(): Promise<IDBDatabase | null> {
   return dbPromise
 }
 
-function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T | undefined> {
+/**
+ * Transaction complète : on attend `oncomplete` (une requête réussie peut encore être annulée,
+ * quota compris) et on REJETTE sur erreur ou annulation (audit F06). `null` : pas de base.
+ */
+function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<{ value: T } | null> {
   return openDb().then(
     (db) =>
-      new Promise<T | undefined>((resolve) => {
-        if (!db) return resolve(undefined)
+      new Promise<{ value: T } | null>((resolve, reject) => {
+        if (!db) return resolve(null)
+        let t: IDBTransaction
+        let req: IDBRequest<T>
         try {
-          const t = db.transaction(STORE, mode)
-          const req = run(t.objectStore(STORE))
-          req.onsuccess = () => resolve(req.result)
-          req.onerror = () => resolve(undefined)
-        } catch {
-          resolve(undefined)
+          t = db.transaction(STORE, mode)
+          req = run(t.objectStore(STORE))
+        } catch (err) {
+          return reject(err)
         }
+        t.oncomplete = () => resolve({ value: req.result })
+        t.onerror = () => reject(t.error ?? req.error ?? new Error('erreur IndexedDB'))
+        t.onabort = () => reject(t.error ?? new Error('transaction IndexedDB annulée'))
       }),
   )
 }
 
-export async function putJob(job: OutboxJob): Promise<void> {
+export type Persistence = 'durable' | 'memory'
+
+/**
+ * Enregistre la tâche. Résultat explicite : `memory` signifie que la vidéo DISPARAÎTRA au
+ * rechargement (quota, navigation privée, passerelle partagée, effacement en cours).
+ */
+export async function putJob(job: OutboxJob): Promise<Persistence> {
   memory.set(job.id, job)
-  await tx('readwrite', (s) => s.put(job))
+  try {
+    const done = await tx('readwrite', (s) => s.put(job))
+    if (done) {
+      durable.add(job.id)
+      return 'durable'
+    }
+  } catch (err) {
+    console.warn('[HashWall] écriture de la file d’envoi impossible :', err)
+  }
+  durable.delete(job.id)
+  return 'memory'
 }
 
+export const isDurable = (id: string): boolean => durable.has(id)
+
 export async function getJob(id: string): Promise<OutboxJob | undefined> {
-  return memory.get(id) ?? (await tx<OutboxJob>('readonly', (s) => s.get(id)))
+  if (memory.has(id)) return memory.get(id)
+  const r = await tx<OutboxJob>('readonly', (s) => s.get(id)).catch(() => null)
+  if (r?.value) durable.add(id)
+  return r?.value
 }
 
 export async function listJobs(): Promise<OutboxJob[]> {
-  const stored = (await tx<OutboxJob[]>('readonly', (s) => s.getAll())) ?? []
+  const stored = (await tx<OutboxJob[]>('readonly', (s) => s.getAll()).catch(() => null))?.value ?? []
+  stored.forEach((j) => durable.add(j.id))
   const byId = new Map(stored.map((j) => [j.id, j]))
   memory.forEach((j, id) => byId.set(id, j))
   return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt)
@@ -111,20 +180,39 @@ export async function listJobs(): Promise<OutboxJob[]> {
 
 export async function deleteJob(id: string): Promise<void> {
   memory.delete(id)
-  await tx('readwrite', (s) => s.delete(id))
+  durable.delete(id)
+  await tx('readwrite', (s) => s.delete(id)).catch(() => null)
 }
 
-export async function wipeOutbox(): Promise<void> {
+/**
+ * Efface la base. Ne se résout QUE sur succès réel (audit F03) : rejet si la suppression échoue
+ * ou reste bloquée (un onglet qui garde la base ouverte) au-delà de `timeoutMs`.
+ */
+export async function wipeOutbox(timeoutMs = 5000): Promise<void> {
+  wiped = true
   memory.clear()
-  const db = await openDb()
-  db?.close()
-  dbPromise = null
-  await new Promise<void>((resolve) => {
+  durable.clear()
+  channel?.postMessage('wipe')
+  await closeDb()
+  if (typeof indexedDB === 'undefined' || isSharedOriginGateway()) return
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let req: IDBOpenDBRequest
     try {
-      const req = indexedDB.deleteDatabase(DB_NAME)
-      req.onsuccess = req.onerror = req.onblocked = () => resolve()
-    } catch {
+      req = indexedDB.deleteDatabase(DB_NAME)
+    } catch (err) {
+      return reject(err)
+    }
+    req.onsuccess = () => {
+      clearTimeout(timer)
       resolve()
+    }
+    req.onerror = () => {
+      clearTimeout(timer)
+      reject(req.error ?? new Error('suppression de la base impossible'))
+    }
+    req.onblocked = () => {
+      timer ??= setTimeout(() => reject(new Error('suppression bloquée par un autre onglet de HashWall : fermez-le puis réessayez')), timeoutMs)
     }
   })
 }

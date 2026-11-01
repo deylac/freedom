@@ -543,6 +543,53 @@ await step('Service worker : installation, puis relance de l’application hors 
 })
 
 // ---------------------------------------------------------------------------
+// Effacement des données avec deux onglets ouverts (audit F03)
+
+await step('Tout effacer avec un second onglet ouvert : la file d’envoi est réellement supprimée', async () => {
+  const first = await newPage({ mobile: true })
+  const context = first.context()
+  await first.goto(`${APP}#effacer`)
+  // Une vidéo en attente dans la file (IndexedDB), comme après une capture hors ligne.
+  await first.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.open('hashwall', 1)
+        req.onupgradeneeded = () => req.result.createObjectStore('outbox', { keyPath: 'id' })
+        req.onsuccess = () => {
+          const db = req.result
+          const t = db.transaction('outbox', 'readwrite')
+          t.objectStore('outbox').put({ id: 'secret', createdAt: Date.now(), tag: 'effacer', state: 'failed', video: { sha256: 'secret' }, servers: [], mirrors: [], posterMirrors: [], attempts: 9, timings: {} })
+          t.oncomplete = () => {
+            db.close()
+            resolve()
+          }
+          t.onerror = () => reject(t.error)
+        }
+      }),
+  )
+  await first.reload()
+  const second = await context.newPage()
+  await second.goto(`${APP}#effacer`)
+  await second.getByRole('button', { name: /Filmer pour #effacer/ }).waitFor()
+  await first.getByRole('button', { name: 'Réglages' }).click()
+  await Promise.all([first.waitForEvent('load', { timeout: 15_000 }), first.getByRole('button', { name: 'Tout effacer maintenant' }).click()])
+  const remaining = await first.evaluate(
+    () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(['base toujours verrouillée (suppression bloquée)']), 5000)
+        const req = indexedDB.open('hashwall', 1)
+        req.onupgradeneeded = () => req.result.createObjectStore('outbox', { keyPath: 'id' })
+        req.onsuccess = () => {
+          const g = req.result.transaction('outbox').objectStore('outbox').getAll()
+          g.onsuccess = () => resolve(g.result.map((j) => j.id))
+        }
+      }),
+  )
+  assert.deepEqual(remaining, [], `données restantes après effacement : ${remaining}`)
+  await context.close()
+})
+
+// ---------------------------------------------------------------------------
 // Test 1 (suite) — changement de hashtag sans requête HTTP
 
 await step('Routage : passage à #15octobre sans requête au serveur web', async () => {

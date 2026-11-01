@@ -4,7 +4,7 @@ import { usePersonalVersion, useSettings } from '../hooks/basics'
 import { normalizeRelay, normalizeServer } from '../lib/blossom/urls'
 import { relativeTime } from '../lib/format'
 import { forgetIdentity, getOrCreateIdentity, hasExtension, identityPubkey, newIdentity, nsecOf, npubOf, parsePubkey, shortNpub } from '../lib/nostr/signer'
-import { deleteMyClip } from '../lib/publish'
+import { deleteMyClip, publisher } from '../lib/publish'
 import { persistentStorageAvailable, wipeLocalKeys } from '../lib/storage/local'
 import { wipeOutbox } from '../lib/storage/outbox'
 import { clearLocalModeration, getLastDiagnostics, getMyClips } from '../lib/storage/personal'
@@ -62,12 +62,20 @@ export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => 
     toast('Modérateurs enregistrés', 'ok')
   }
 
+  const [wipeError, setWipeError] = useState<string | null>(null)
   const panic = async () => {
-    if (!confirm('Effacer définitivement la clé, la liste de vos vidéos, les envois en attente et les réglages de cet appareil ?')) return
+    if (!wipeError && !confirm('Effacer définitivement la clé, la liste de vos vidéos, les envois en attente et les réglages de cet appareil ?')) return
+    // Audit F03 : arrêter les envois (ils réécriraient la base), puis n'annoncer la fin qu'après
+    // la suppression EFFECTIVE de la file d'envoi.
+    publisher.stopAll()
     forgetIdentity()
     wipeLocalKeys()
-    await wipeOutbox()
-    location.reload()
+    try {
+      await wipeOutbox()
+      location.reload()
+    } catch (err) {
+      setWipeError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -275,8 +283,14 @@ export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => 
 
         <Section title="Données de cet appareil">
           <Button variant="danger" onClick={panic}>
-            Tout effacer maintenant
+            {wipeError ? 'Réessayer l’effacement' : 'Tout effacer maintenant'}
           </Button>
+          {wipeError && (
+            <p className="mt-2 rounded-xl border border-rec/50 p-2.5 text-xs text-rec" role="alert" data-testid="wipe-error">
+              Effacement INCOMPLET : {wipeError}. La clé et les réglages sont effacés, mais des vidéos en attente
+              peuvent rester sur l’appareil.
+            </p>
+          )}
           <p className="mt-2 text-xs text-muted">Clé secrète, liste de vos vidéos, envois en attente et réglages. Irréversible.</p>
         </Section>
 

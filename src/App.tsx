@@ -3,6 +3,7 @@ import { TERMS_VERSION } from './config'
 import { useHashRoute, useSettings } from './hooks/basics'
 import { refreshSignedMirrors } from './lib/mirrors'
 import { publisher } from './lib/publish'
+import { onRemoteWipe } from './lib/storage/outbox'
 import { BundleImportSheet, BundleShareSheet } from './components/BundleSheets'
 import { CaptureScreen } from './components/CaptureScreen'
 import { Home } from './components/Home'
@@ -29,6 +30,16 @@ export default function App() {
     window.addEventListener('online', onOnline)
     return () => window.removeEventListener('online', onOnline)
   }, [])
+
+  // Effacement des données demandé dans un autre onglet : on arrête tout et on recharge (audit F03).
+  useEffect(
+    () =>
+      onRemoteWipe(() => {
+        publisher.stopAll()
+        location.reload()
+      }),
+    [],
+  )
 
   // Liste signée des adresses de secours : mise en cache, elle survit au blocage de cette adresse.
   useEffect(() => {

@@ -53,7 +53,7 @@ import {
   localSigner,
   type Signer,
 } from './nostr/signer'
-import { deleteJob, getJob, listJobs, putJob, type Diagnostic, type OutboxJob } from './storage/outbox'
+import { deleteJob, getJob, isDurable, listJobs, putJob, type Diagnostic, type OutboxJob } from './storage/outbox'
 import { createBundle } from './bundle'
 import { markServerListPublished, removeMyClip, saveLastDiagnostics, saveMyClip, serverListPublished, type MyClip } from './storage/personal'
 import { getSettings } from './storage/settings'
@@ -528,6 +528,8 @@ export interface JobView {
   timings: OutboxJob['timings']
   mirrors: number
   diagnostics: Diagnostic[]
+  /** La vidéo est réellement enregistrée sur l'appareil (sinon : perdue au rechargement, audit F06). */
+  durable: boolean
 }
 
 type Listener = () => void
@@ -563,6 +565,7 @@ class Publisher {
       timings: j.timings,
       mirrors: j.mirrors.length,
       diagnostics: [...(j.diagnostics ?? [])],
+      durable: isDurable(j.id),
     }))
     this.snapshot = [...live, ...this.recent.filter((r) => !this.jobs.has(r.id))]
     this.listeners.forEach((l) => l())
@@ -599,6 +602,19 @@ class Publisher {
     this.jobs.delete(id)
     this.progress.delete(id)
     await deleteJob(id)
+    this.emit()
+  }
+
+  /** Arrête tout (effacement des données) : plus aucune écriture ne doit suivre. */
+  stopAll() {
+    for (const lane of ['publish', 'mirror'] as Lane[]) {
+      this.active[lane]?.controller.abort()
+      this.queues[lane] = []
+    }
+    this.jobs.clear()
+    this.progress.clear()
+    this.errors.clear()
+    this.recent = []
     this.emit()
   }
 
@@ -643,6 +659,7 @@ class Publisher {
           timings: job.timings,
           mirrors: job.mirrors.length,
           diagnostics: [...(job.diagnostics ?? [])],
+          durable: true,
         }
         this.recent = [finished, ...this.recent].slice(0, 5)
         this.jobs.delete(id)

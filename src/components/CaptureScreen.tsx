@@ -6,6 +6,7 @@ import { detectCaptureSupport } from '../lib/media/mime'
 import { CaptureError, CaptureSession, type FaceStatus, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
+import { isDurable } from '../lib/storage/outbox'
 import { IconCheck, IconClose, IconFace, IconMic, IconRetry, IconSwitch } from './icons'
 import { Button, Toggle, useToast } from './ui'
 
@@ -193,6 +194,10 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
             try {
               const job = await createJob(recording, { tag, caption, contentWarning, useExtension: settings.useExtension })
               publisher.enqueue(job)
+              if (!isDurable(job.id)) {
+                // Audit F06 : ne pas laisser croire que la vidéo est en sécurité sur l'appareil.
+                toast('Stockage de l’appareil indisponible (plein ou navigation privée) : la vidéo n’existe que dans cet onglet. Ne le fermez pas avant la fin de l’envoi.', 'error')
+              }
               if (settings.rotateIdentity && !settings.useExtension) newIdentity()
               onClose()
             } catch (err) {
