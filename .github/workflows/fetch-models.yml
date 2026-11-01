@@ -1,0 +1,41 @@
+name: Récupérer les modèles de détection de visages
+
+# Le conteneur de développement ne peut pas joindre storage.googleapis.com : ce workflow
+# télécharge les modèles officiels MediaPipe (Apache-2.0), enregistre leur SHA-256 et les
+# committe dans public/models/. Il se déclenche quand ce fichier est modifié.
+on:
+  push:
+    paths:
+      - .github/workflows/fetch-models.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Télécharger
+        run: |
+          mkdir -p public/models
+          base=https://storage.googleapis.com/mediapipe-models/face_detector
+          for m in blaze_face_short_range blaze_face_full_range blaze_face_full_range_sparse; do
+            url="$base/$m/float16/1/$m.tflite"
+            if curl -fsSL --retry 3 -o "public/models/$m.tflite" "$url"; then
+              echo "OK  $url ($(stat -c %s public/models/$m.tflite) octets)"
+            else
+              echo "ABSENT $url"
+              rm -f "public/models/$m.tflite"
+            fi
+          done
+          (cd public/models && sha256sum *.tflite > SHA256SUMS && cat SHA256SUMS)
+      - name: Committer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/models
+          git diff --cached --quiet && echo "Rien de nouveau" && exit 0
+          git commit -m "Modèles MediaPipe de détection de visages (téléchargés par GitHub Actions)"
+          git push

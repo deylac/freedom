@@ -60,6 +60,7 @@ async function preflight(server, path, headers) {
   return `${ok ? 'OK ' : 'KO '} ${fmt(r)} origin=${allowOrigin} headers=${allowHeaders || '-'} methods=${allowMethods || '-'}`
 }
 
+const summary = []
 console.log(`PROBE origine simulée : ${ORIGIN}\n`)
 for (const server of SERVERS) {
   console.log(`=== ${server}`)
@@ -74,15 +75,22 @@ for (const server of SERVERS) {
     headers: { 'X-SHA-256': FAKE_SHA, 'X-Content-Length': '5000000', 'X-Content-Type': 'video/mp4' },
   })
   console.log(`  HEAD /upload sans jeton       ${fmt(headNoAuth)} reason=${headNoAuth.h('x-reason') ?? '-'}`)
+  let lastHead = 0
   for (const size of [5_000_000, 19_000_000]) {
     const head = await req(`${server}/upload`, {
       method: 'HEAD',
       headers: { 'X-SHA-256': FAKE_SHA, 'X-Content-Length': String(size), 'X-Content-Type': 'video/mp4', Authorization: auth('upload', FAKE_SHA, server) },
     })
+    lastHead = head.status
     console.log(`  HEAD /upload jeton ${String(size / 1e6).padStart(2)} Mo    ${fmt(head)} reason=${head.h('x-reason') ?? '-'} expose=${head.h('access-control-expose-headers') ?? '-'}`)
   }
   const blob = await req(`${server}/${TEST_SHA}.mp4`, { method: 'HEAD' })
-  console.log(`  HEAD blob de test             ${fmt(blob)} type=${blob.h('content-type') ?? '-'} ranges=${blob.h('accept-ranges') ?? '-'} acao=${blob.h('access-control-allow-origin') ?? '-'}`)
+  console.log(`  HEAD blob de test             ${fmt(blob)} type=${blob.h('content-type') ?? '-'} ranges=${blob.h('accept-ranges') ?? '-'} acao=${blob.h('access-control-allow-origin') ?? '-'} sunset=${blob.h('sunset') ?? '-'}`)
+  const missing = await req(`${server}/${FAKE_SHA}.mp4`, { method: 'HEAD', headers: { Origin: ORIGIN } })
+  const errCors = missing.h('access-control-allow-origin')
+  console.log(`  CORS sur réponse d'erreur     ${errCors ? 'OK ' : 'KO '} ${fmt(missing)} acao=${errCors ?? '-'}`)
+  console.log(`  CORS PUT /report (BUD-09)     ${await preflight(server, '/report', 'content-type')}`)
+  summary.push({ server, upload: lastHead, errCors: !!errCors })
   console.log('')
 }
 
@@ -124,3 +132,43 @@ async function probeRelay(url) {
 }
 
 for (const relay of RELAYS) console.log(await probeRelay(relay), '\n')
+
+// --- OpenTimestamps : calendriers (POST /digest, requête « simple » sans pré-vol CORS) ---
+const CALENDARS = (process.env.PROBE_CALENDARS ??
+  'https://alice.btc.calendar.opentimestamps.org https://bob.btc.calendar.opentimestamps.org https://finney.calendar.eternitywall.com https://btc.calendar.catallaxy.com').split(/\s+/)
+const randomDigest = crypto.getRandomValues(new Uint8Array(32))
+for (const cal of CALENDARS) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15000)
+  const t0 = Date.now()
+  try {
+    const res = await fetch(`${cal}/digest`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, Accept: 'application/vnd.opentimestamps.v1', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: randomDigest,
+      signal: controller.signal,
+    })
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    console.log(`=== ${cal}\n  POST /digest ${res.status} (${Date.now() - t0} ms) ${bytes.length} octets acao=${res.headers.get('access-control-allow-origin') ?? '-'} début=${Buffer.from(bytes.slice(0, 24)).toString('hex')}`)
+    const miss = await req(`${cal}/timestamp/${'00'.repeat(32)}`, { headers: { Origin: ORIGIN, Accept: 'application/vnd.opentimestamps.v1' } })
+    console.log(`  GET /timestamp/<inconnu> ${fmt(miss)} acao=${miss.h('access-control-allow-origin') ?? '-'}`)
+  } catch (err) {
+    console.log(`=== ${cal}\n  ERREUR ${err.name === 'AbortError' ? 'TIMEOUT' : err.message}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// --- Explorateurs Bitcoin (vérification des attestations) ---
+for (const api of ['https://blockstream.info/api', 'https://mempool.space/api']) {
+  const tip = await req(`${api}/blocks/tip/height`, { headers: { Origin: ORIGIN } })
+  const hash = await req(`${api}/block-height/810391`, { headers: { Origin: ORIGIN } })
+  console.log(`=== ${api}\n  tip ${fmt(tip)} acao=${tip.h('access-control-allow-origin') ?? '-'} ; block-height ${fmt(hash)} acao=${hash.h('access-control-allow-origin') ?? '-'}`)
+}
+
+// --- Hébergement du modèle MediaPipe (pour information) ---
+const model = await req('https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite', { method: 'HEAD', headers: { Origin: ORIGIN } })
+console.log(`=== modèle MediaPipe sur storage.googleapis.com : ${fmt(model)} acao=${model.h('access-control-allow-origin') ?? '-'}`)
+
+console.log('\n| Serveur | HEAD /upload (jeton) | CORS sur erreurs |\n|---|---|---|')
+for (const r of summary) console.log(`| ${r.server.replace('https://', '')} | ${r.upload || 'erreur'} | ${r.errCors ? 'oui' : 'non'} |`)
