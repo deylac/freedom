@@ -759,7 +759,16 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${video}`, '--no-proxy-server'],
   })
   try {
-  const context = await faceBrowser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera', 'microphone'] })
+  // Constat réel (iPhone, Chrome iOS) : « Can't find variable: document ». MediaPipe ne reconnaît
+  // OffscreenCanvas que si l'identifiant contient « Version/ » (Safari) ; Chrome, Firefox, Edge iOS
+  // n'en ont pas. On simule donc l'identifiant de Chrome sur iPhone.
+  const context = await faceBrowser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    permissions: ['camera', 'microphone'],
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.96 Mobile/15E148 Safari/604.1',
+  })
   await context.addInitScript((s) => localStorage.setItem('hw:settings', JSON.stringify(s)), { ...settings, termsAcceptedVersion: 1 })
   const external = []
   context.on('request', (r) => { if (!/^(http:\/\/127\.0\.0\.1|data:|blob:)/.test(r.url())) external.push(r.url()) })

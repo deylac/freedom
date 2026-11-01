@@ -72,7 +72,12 @@ async function init(msg: Extract<FaceWorkerIn, { type: 'init' }>) {
   const actual = await sha256Hex(model)
   if (actual !== msg.modelSha256) throw new Error('empreinte du modèle inattendue (fichier altéré ?)')
   const fileset = await FilesetResolver.forVisionTasks(msg.wasmBase)
+  if (typeof OffscreenCanvas === 'undefined') throw new Error('OffscreenCanvas indisponible (iOS 16 ou antérieur)')
   detector = await FaceDetector.createFromOptions(fileset, {
+    // Canvas fourni explicitement : sans lui, MediaPipe ne détecte OffscreenCanvas que si l'identifiant
+    // du navigateur contient « Version/ » (Safari) et tombe sinon sur `document`, absent d'un worker.
+    // Constat réel : Chrome sur iPhone (CriOS) → « Can't find variable: document ».
+    canvas: new OffscreenCanvas(1, 1),
     baseOptions: { modelAssetBuffer: model, delegate: 'CPU' },
     runningMode: 'IMAGE',
     // Seuil bas : pour l'anonymisation, un faux positif (zone floutée en trop) est sans gravité.
