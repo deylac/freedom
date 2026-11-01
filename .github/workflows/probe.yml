@@ -1,0 +1,23 @@
+name: Sonde des serveurs (lecture seule)
+
+on:
+  push:
+    paths:
+      - scripts/probe-servers.mjs
+      - .github/workflows/probe.yml
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/probe-servers.mjs
