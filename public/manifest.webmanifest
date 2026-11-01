@@ -1,0 +1,20 @@
+{
+  "name": "HashWall — mur vidéo citoyen",
+  "short_name": "HashWall",
+  "description": "Filmez 60 secondes et publiez sans compte sur un mur public décentralisé.",
+  "lang": "fr",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0F1D",
+  "theme_color": "#0A0F1D",
+  "categories": ["news", "social", "photo"],
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,340 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MAX_CLIP_MS, MAX_UPLOAD_BYTES } from '../config'
+import { useSettings, useWakeLock } from '../hooks/basics'
+import { formatBytes, formatDuration } from '../lib/format'
+import { detectCaptureSupport } from '../lib/media/mime'
+import { CaptureError, CaptureSession, faceDetectionAvailable, type FilterMode, type Recording } from '../lib/media/recorder'
+import { newIdentity } from '../lib/nostr/signer'
+import { createJob, publisher } from '../lib/publish'
+import { IconCheck, IconClose, IconFace, IconRetry, IconSwitch } from './icons'
+import { Button, Toggle, useToast } from './ui'
+
+type Phase = 'starting' | 'ready' | 'recording' | 'processing' | 'review' | 'error'
+
+const AUTO_PUBLISH_SECONDS = 3
+
+function maxDuration(): number {
+  // Les tests de bout en bout raccourcissent la limite ; jamais en production.
+  if (import.meta.env.MODE === 'e2e') {
+    const override = Number(localStorage.getItem('hw:e2e:maxMs'))
+    if (override > 0) return override
+  }
+  return MAX_CLIP_MS
+}
+
+function Ring({ remaining, total }: { remaining: number; total: number }) {
+  const r = 46
+  const c = 2 * Math.PI * r
+  const fraction = Math.max(0, Math.min(1, remaining / total))
+  return (
+    <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 h-full w-full -rotate-90" aria-hidden>
+      <circle cx="50" cy="50" r={r} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="5" />
+      <circle
+        cx="50"
+        cy="50"
+        r={r}
+        fill="none"
+        stroke="#00F0FF"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - fraction)}
+        style={{ transition: 'stroke-dashoffset 0.1s linear', filter: 'drop-shadow(0 0 6px rgba(0,240,255,0.7))' }}
+      />
+    </svg>
+  )
+}
+
+const FILTER_LABEL: Record<FilterMode, string> = {
+  none: 'Sans filtre',
+  faces: 'Visages floutés',
+  pixelate: 'Image pixelisée',
+}
+
+export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => void }) {
+  const settings = useSettings()
+  const toast = useToast()
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const session = useRef<CaptureSession | null>(null)
+  const [phase, setPhase] = useState<Phase>('starting')
+  const [error, setError] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const [recording, setRecording] = useState<Recording | null>(null)
+  const [filter, setFilter] = useState<FilterMode>('none')
+  const [facing, setFacing] = useState<'environment' | 'user'>('environment')
+  const [faceFallback, setFaceFallback] = useState(false)
+  const total = useMemo(maxDuration, [])
+
+  useWakeLock(phase !== 'error')
+
+  // Ouverture immédiate de la caméra (Time-to-Camera < 2 s).
+  useEffect(() => {
+    const support = detectCaptureSupport()
+    if (!support.ok || !support.mime) {
+      setError(support.reason ?? 'Capture impossible')
+      setPhase('error')
+      return
+    }
+    const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality)
+    s.maxMs = total
+    session.current = s
+    s.open()
+      .then(() => setPhase((p) => (p === 'starting' ? 'ready' : p)))
+      .catch((err: unknown) => {
+        setError(err instanceof CaptureError ? err.message : String(err))
+        setPhase('error')
+      })
+    return () => s.close()
+    // La qualité est figée à l'ouverture de la caméra.
+  }, [])
+
+  useEffect(() => {
+    if (phase !== 'recording') return
+    const id = setInterval(() => {
+      const s = session.current
+      if (!s) return
+      setElapsed(s.elapsedMs())
+      if (s.faceFallback) setFaceFallback(true)
+    }, 100)
+    return () => clearInterval(id)
+  }, [phase])
+
+  const start = () => {
+    const s = session.current
+    if (!s || phase !== 'ready') return
+    setElapsed(0)
+    setPhase('recording')
+    s.start()
+      .then((rec) => {
+        setRecording(rec)
+        setPhase('review')
+        if (rec.stoppedBy === 'interrupted') toast('Enregistrement interrompu (écran verrouillé ou caméra coupée) : la partie filmée est conservée.', 'info')
+      })
+      .catch((err: unknown) => {
+        setError(`Échec de l'enregistrement : ${err instanceof Error ? err.message : err}`)
+        setPhase('error')
+      })
+  }
+
+  const stop = () => {
+    if (phase !== 'recording') return
+    setPhase('processing')
+    session.current?.stop()
+  }
+
+  const cycleFilter = () => {
+    const order: FilterMode[] = faceDetectionAvailable() ? ['none', 'faces', 'pixelate'] : ['none', 'pixelate']
+    const next = order[(order.indexOf(filter) + 1) % order.length]
+    setFilter(next)
+    if (session.current) session.current.filter = next
+  }
+
+  const switchCamera = async () => {
+    try {
+      await session.current?.switchCamera()
+      setFacing(session.current?.facing ?? 'environment')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const retake = () => {
+    setRecording(null)
+    setElapsed(0)
+    setPhase('ready')
+  }
+
+  const remaining = total - elapsed
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black text-white" role="dialog" aria-modal="true" aria-label={`Filmer pour #${tag}`} data-testid="capture">
+      {/* La vidéo brute reste dans le DOM (iOS ne décode pas une vidéo masquée), sous le canvas. */}
+      <video ref={videoRef} className="absolute inset-0 h-full w-full object-cover opacity-0" muted playsInline aria-hidden />
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full object-cover"
+        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' ? 'hidden' : 'visible' }}
+        aria-label="Aperçu de la caméra"
+      />
+
+      {phase === 'review' && recording && (
+        <Review
+          tag={tag}
+          recording={recording}
+          autoPublish={settings.autoPublish}
+          onRetake={retake}
+          onCancel={onClose}
+          onPublish={async (caption, contentWarning) => {
+            try {
+              const job = await createJob(recording, { tag, caption, contentWarning, useExtension: settings.useExtension })
+              publisher.enqueue(job)
+              if (settings.rotateIdentity && !settings.useExtension) newIdentity()
+              onClose()
+            } catch (err) {
+              toast(`Publication impossible : ${err instanceof Error ? err.message : err}`, 'error')
+            }
+          }}
+        />
+      )}
+
+      {phase !== 'review' && (
+        <>
+          <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-4 pb-10 pt-safe">
+            <button onClick={onClose} aria-label="Fermer la caméra" className="rounded-full bg-black/40 p-2.5">
+              <IconClose />
+            </button>
+            <span className="truncate text-lg font-bold">
+              <span className="text-accent">#</span>
+              {tag}
+            </span>
+            <div className="flex gap-2">
+              <button onClick={cycleFilter} aria-label={`Filtre d'anonymisation : ${FILTER_LABEL[filter]}`} className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold ${filter === 'none' ? 'bg-black/40' : 'bg-accent text-night'}`} disabled={phase === 'starting' || phase === 'error'}>
+                <IconFace size={18} />
+                <span className="hidden sm:inline">{FILTER_LABEL[filter]}</span>
+              </button>
+              <button onClick={switchCamera} aria-label="Changer de caméra" className="rounded-full bg-black/40 p-2.5" disabled={phase === 'starting' || phase === 'error'}>
+                <IconSwitch />
+              </button>
+            </div>
+          </div>
+
+          {filter !== 'none' && (
+            <p className="absolute inset-x-4 top-24 text-center text-xs text-white/80" role="status">
+              {filter === 'faces' && faceFallback ? 'Détection des visages indisponible : image entière pixelisée par sécurité.' : filter === 'faces' ? 'Les visages détectés sont floutés dans le fichier final.' : 'Toute l’image est pixelisée dans le fichier final.'}
+            </p>
+          )}
+
+          {phase === 'error' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/95 p-8 text-center">
+              <p className="text-lg font-semibold">Caméra indisponible</p>
+              <p className="max-w-sm text-sm text-muted">{error}</p>
+              <Button variant="ghost" onClick={onClose}>
+                Retour au mur
+              </Button>
+            </div>
+          )}
+
+          {phase === 'starting' && (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted" role="status">
+              Ouverture de la caméra…
+            </div>
+          )}
+
+          <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-3 bg-gradient-to-t from-black/80 to-transparent pb-safe pt-16">
+            <span className={`font-mono text-lg font-bold tabular-nums ${phase === 'recording' ? 'text-accent' : 'text-white/70'}`} aria-live="off">
+              {formatDuration(Math.ceil(remaining / 1000))}
+            </span>
+            <div className="relative h-24 w-24">
+              <Ring remaining={phase === 'recording' || phase === 'processing' ? remaining : total} total={total} />
+              {phase === 'recording' ? (
+                <button onClick={stop} aria-label="Arrêter l'enregistrement" className="absolute inset-4 flex items-center justify-center rounded-full bg-white/10" data-testid="stop">
+                  <span className="h-8 w-8 rounded-md bg-rec" />
+                </button>
+              ) : (
+                <button
+                  onClick={start}
+                  disabled={phase !== 'ready'}
+                  aria-label="Démarrer l'enregistrement (60 secondes maximum)"
+                  className="absolute inset-3 rounded-full bg-rec shadow-lg shadow-rec/40 transition active:scale-90 disabled:opacity-40"
+                  data-testid="record"
+                />
+              )}
+            </div>
+            <span className="text-xs text-white/60">{phase === 'recording' ? 'Enregistrement…' : phase === 'processing' ? 'Finalisation…' : '60 secondes max · métadonnées GPS supprimées'}</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function Review({
+  tag,
+  recording,
+  autoPublish,
+  onRetake,
+  onCancel,
+  onPublish,
+}: {
+  tag: string
+  recording: Recording
+  autoPublish: boolean
+  onRetake: () => void
+  onCancel: () => void
+  onPublish: (caption: string, contentWarning?: string) => Promise<void>
+}) {
+  const url = useMemo(() => URL.createObjectURL(recording.blob), [recording.blob])
+  useEffect(() => () => URL.revokeObjectURL(url), [url])
+  const [countdown, setCountdown] = useState<number | null>(autoPublish ? AUTO_PUBLISH_SECONDS : null)
+  const [caption, setCaption] = useState('')
+  const [sensitive, setSensitive] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const tooBig = recording.size > MAX_UPLOAD_BYTES
+
+  const publish = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    setCountdown(null)
+    await onPublish(caption, sensitive ? 'Contenu sensible (violence possible)' : undefined)
+    setBusy(false)
+  }, [busy, caption, sensitive, onPublish])
+
+  // « Zero-click » : publication après 3 s d'aperçu, interrompue par toute interaction.
+  useEffect(() => {
+    if (countdown === null) return
+    if (countdown <= 0) {
+      void publish()
+      return
+    }
+    const id = setTimeout(() => setCountdown((c) => (c === null ? null : c - 1)), 1000)
+    return () => clearTimeout(id)
+  }, [countdown, publish])
+
+  const pause = () => setCountdown(null)
+
+  return (
+    <div className="absolute inset-0 flex flex-col bg-black" data-testid="review">
+      <video src={url} className="min-h-0 flex-1 object-contain" autoPlay muted loop playsInline controls={false} aria-label="Aperçu de votre vidéo" />
+      <div className="space-y-3 border-t border-line bg-surface p-4 pb-safe">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+          <span className="text-white">{formatDuration(recording.durationSec)}</span>
+          <span>{formatBytes(recording.size)}</span>
+          <span>{recording.mime}</span>
+          <span className="text-ok">✓ aucune métadonnée GPS / appareil</span>
+          {recording.scrub.datesCleared > 0 && <span className="text-ok">✓ dates internes effacées</span>}
+        </div>
+        {tooBig && <p className="text-xs text-rec">Fichier de {formatBytes(recording.size)} : certains serveurs gratuits (limite 20 Mio) le refuseront. Le mode « réseau saturé » des réglages réduit la taille.</p>}
+        <input
+          value={caption}
+          onChange={(e) => setCaption(e.target.value.slice(0, 280))}
+          onFocus={pause}
+          placeholder={`Légende facultative (#${tag} est ajouté automatiquement)`}
+          className="h-11 w-full rounded-xl border border-line bg-night px-3 text-sm text-white placeholder:text-muted focus:border-accent focus:outline-none"
+          aria-label="Légende"
+        />
+        <Toggle
+          checked={sensitive}
+          onChange={(v) => {
+            pause()
+            setSensitive(v)
+          }}
+          label="Contenu sensible (violence, blessés…)"
+          hint="La vidéo sera masquée derrière un avertissement et ne sera pas préchargée."
+        />
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onCancel} aria-label="Annuler et supprimer la vidéo" className="px-3">
+            <IconClose size={18} />
+          </Button>
+          <Button variant="ghost" onClick={onRetake} className="flex-1">
+            <IconRetry size={18} /> Refaire
+          </Button>
+          <Button onClick={publish} disabled={busy} className="flex-[2]" data-testid="publish">
+            <IconCheck size={18} />
+            {busy ? 'Préparation…' : countdown !== null ? `Publication dans ${countdown}…` : 'Publier'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
