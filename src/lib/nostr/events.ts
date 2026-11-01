@@ -19,6 +19,7 @@ export const KIND_REPORT = 1984
 export const KIND_DELETION = 5
 export const KIND_MUTE_LIST = 10000
 export const KIND_FOLLOWS = 3
+export const KIND_FILE_METADATA = 1063
 
 const HEX64 = /^[0-9a-f]{64}$/
 

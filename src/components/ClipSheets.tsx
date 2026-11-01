@@ -7,6 +7,7 @@ import { clipNaddr, type Clip, type ReportReason } from '../lib/nostr/events'
 import { seenOn } from '../lib/nostr/pool'
 import { shortNpub } from '../lib/nostr/signer'
 import { reportClip } from '../lib/publish'
+import { preservationPlan, preserveClip } from '../lib/preserve'
 import { hideClip, muteAuthor, unhideClip } from '../lib/storage/personal'
 import { useSettings } from '../hooks/basics'
 import { upgradeProof, verifyProof, type ProofStatus } from '../lib/ots/client'
@@ -46,20 +47,42 @@ export function ClipMenu({
   store,
   onClose,
   onResilience,
+  source,
 }: {
   clip: Clip
   tag: string
   store: WallStore | null
   onClose: () => void
   onResilience: () => void
+  source?: string | null
 }) {
   const toast = useToast()
   const settings = useSettings()
-  const extraServers = useExtraServers(store, clip.pubkey)
+  const extraServers = useExtraServers(store, clip)
   const candidates = useCandidates(clip, extraServers)
   const [mode, setMode] = useState<'menu' | 'report'>('menu')
   const [busy, setBusy] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [preserving, setPreserving] = useState(false)
+
+  const preserve = async () => {
+    setPreserving(true)
+    try {
+      const plan = preservationPlan(clip, store?.copyServersOf(clip.video.sha256) ?? [], store?.knownServers() ?? [], source)
+      const r = await preserveClip(clip, plan.sources, plan.holders, plan.candidates)
+      toast(
+        r.copies.length
+          ? `Copiée sur ${r.copies.length} serveur${r.copies.length > 1 ? 's' : ''} de plus (${r.copies.map(hostOf).join(', ')}). Merci !`
+          : 'Aucun serveur supplémentaire n’a accepté la copie.',
+        r.copies.length ? 'ok' : 'error',
+      )
+    } catch (err) {
+      toast(`Préservation impossible : ${err instanceof Error ? err.message : err}`, 'error')
+    } finally {
+      setPreserving(false)
+      onClose()
+    }
+  }
 
   const report = async (reason: ReportReason) => {
     setBusy(true)
@@ -147,6 +170,9 @@ export function ClipMenu({
         </button>
         <button className={item} onClick={download} disabled={downloading || !clip.video.sha256}>
           <IconDownload size={20} className="text-muted" /> {downloading ? 'Téléchargement et vérification…' : 'Télécharger (empreinte vérifiée)'}
+        </button>
+        <button className={item} onClick={preserve} disabled={preserving || !clip.video.sha256} data-testid="preserve">
+          <IconShield size={20} className="text-accent" /> {preserving ? 'Copie en cours…' : 'Préserver cette vidéo (copie sur d’autres serveurs)'}
         </button>
         <button className={item} onClick={onResilience}>
           <IconShield size={20} className="text-ok" /> Résilience et intégrité
@@ -236,7 +262,7 @@ export function ResilienceSheet({
   onClose: () => void
 }) {
   const toast = useToast()
-  const extraServers = useExtraServers(store, clip.pubkey)
+  const extraServers = useExtraServers(store, clip)
   const candidates = useCandidates(clip, extraServers)
   const declared = new Set([clip.video.url, ...clip.video.fallbacks])
   const [status, setStatus] = useState<Record<string, Availability>>({})

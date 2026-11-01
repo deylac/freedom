@@ -301,6 +301,7 @@ export function WallView({
           clip={menu.clip}
           tag={tag}
           store={store}
+          source={menu.source?.url}
           onClose={() => setMenu(null)}
           onResilience={() => {
             setResilience(menu)

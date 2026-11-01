@@ -23,7 +23,7 @@ export function DiagnosticList({ items }: { items: Diagnostic[] }) {
 }
 
 /** Suivi des envois en cours (file persistante, reprise automatique). */
-export function PublishTray() {
+export function PublishTray({ onBundle }: { onBundle?: (id: string) => void }) {
   const jobs = useSyncExternalStore(publisher.subscribe, publisher.getSnapshot)
   const busy = jobs.some((j) => j.state !== 'done' && j.progress.stage !== 'error')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -102,6 +102,11 @@ export function PublishTray() {
               </div>
             )}
             {failed && job.error && <p className="mt-2 max-h-24 overflow-y-auto whitespace-pre-line text-xs text-rec/90">{job.error}</p>}
+            {failed && !job.timings.publishedAt && onBundle && (
+              <button onClick={() => onBundle(job.id)} className="mt-2 text-xs font-semibold text-accent underline" data-testid="bundle-open">
+                Pas de réseau ? Confier la vidéo à un proche (AirDrop, Bluetooth…)
+              </button>
+            )}
             {job.diagnostics.length > 0 && !failed && (
               <button onClick={() => toggle(job.id)} className="mt-1.5 text-xs font-semibold text-accent" aria-expanded={expanded.has(job.id)}>
                 {expanded.has(job.id) ? 'Masquer les détails' : 'Détails par serveur'}

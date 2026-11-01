@@ -76,6 +76,36 @@ export function ResilientVideo({
   // Nouvelle liste de candidats (ex. v2 avec fallback reçue) : on garde la source courante si possible.
   const src = load && !failed ? (candidates[index] ?? null) : null
 
+  /**
+   * La liste des candidats change en cours de route (v2 avec fallback, copie annoncée par un
+   * spectateur, liste de serveurs de l'auteur) et une nouvelle source peut s'insérer AVANT celles
+   * déjà essayées : on raisonne donc sur les URL essayées, pas sur des positions.
+   */
+  const tried = useRef(new Set<string>())
+  const current = useRef<string | null>(null)
+  const candidatesRef = useRef(candidates)
+  useEffect(() => {
+    if (src) {
+      tried.current.add(src)
+      current.current = src
+    }
+  }, [src])
+  useEffect(() => {
+    candidatesRef.current = candidates
+    if (failed) {
+      // Tout avait échoué : on reprend sur la première source jamais essayée.
+      const i = candidates.findIndex((u) => !tried.current.has(u))
+      if (i >= 0) {
+        setIndex(i)
+        setFailed(false)
+      }
+    } else if (current.current) {
+      // On garde la source en cours de lecture même si sa position a changé.
+      const i = candidates.indexOf(current.current)
+      if (i >= 0) setIndex(i)
+    }
+  }, [candidates, failed])
+
   useEffect(() => {
     onSource?.({ url: src, index, total: candidates.length, failed })
   }, [src, index, candidates.length, failed, onSource])
@@ -94,14 +124,11 @@ export function ResilientVideo({
     clearStall()
     const v = videoRef.current
     if (v && Number.isFinite(v.currentTime) && v.currentTime > 0) resumeAt.current = v.currentTime
-    setIndex((i) => {
-      if (i + 1 >= candidates.length) {
-        setFailed(true)
-        return i
-      }
-      return i + 1
-    })
-  }, [candidates.length])
+    const list = candidatesRef.current
+    const i = list.findIndex((u) => !tried.current.has(u))
+    if (i < 0) setFailed(true)
+    else setIndex(i)
+  }, [])
 
   const armStall = useCallback(() => {
     clearStall()
@@ -255,6 +282,7 @@ export function ResilientVideo({
             className="rounded-lg border border-line px-3 py-1.5 text-accent"
             onClick={(e) => {
               e.stopPropagation()
+              tried.current.clear()
               setFailed(false)
               setIndex(0)
             }}

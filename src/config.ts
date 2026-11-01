@@ -1,3 +1,4 @@
+import * as nip19 from 'nostr-tools/nip19'
 /**
  * Configuration par défaut. Chaque valeur peut être surchargée au build via les variables
  * d'environnement VITE_* (voir .env.example) puis par l'utilisateur dans les Réglages.
@@ -22,7 +23,13 @@ const int = (raw: string | undefined, fallback: number): number => {
 
 const env = import.meta.env
 
-/** Relais Nostr généralistes (lecture + écriture). */
+/**
+ * Relais Nostr généralistes (lecture + écriture), opérés par des personnes différentes dans
+ * plusieurs pays : pour bloquer le mur, il faut tous les bloquer. Tous ont répondu à la sonde
+ * `scripts/probe-servers.mjs` (1ᵉʳ nov. 2026 : connexion, NIP-11, requête sur kind 34236).
+ * Écartés : nostr.wine (403, payant), relay.nostr.band (injoignable), relay.fountain.fm (kinds
+ * refusés), relay.lumina.rocks (502), nostr.lu.ke (TLS), relay.0xchat.com, relay.nostr.bg (DNS).
+ */
 export const DEFAULT_RELAYS = list(env.VITE_RELAYS, [
   'wss://relay.damus.io',
   'wss://nos.lol',
@@ -30,7 +37,22 @@ export const DEFAULT_RELAYS = list(env.VITE_RELAYS, [
   'wss://nostr.mom',
   'wss://relay.nostr.net',
   'wss://offchain.pub',
+  'wss://relay.snort.social',
+  'wss://nostr-pub.wellorder.net',
+  'wss://nostr.einundzwanzig.space',
+  'wss://relay.nostr.wirednet.jp',
+  'wss://nostr.oxtr.dev',
+  'wss://nostr.bitcoiner.social',
+  'wss://relay.nostrplebs.com',
+  'wss://nostr.data.haus',
+  'wss://relay.orangepill.ovh',
+  'wss://relay.divine.video',
 ])
+
+/** Anciennes listes de relais par défaut (même logique que LEGACY_DEFAULT_BLOSSOM_SERVERS). */
+export const LEGACY_DEFAULT_RELAYS = [
+  ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://relay.nostr.net', 'wss://offchain.pub'],
+]
 
 /**
  * Serveurs Blossom, par ordre de préférence. Le client essaie chaque serveur via
@@ -43,11 +65,13 @@ export const DEFAULT_RELAYS = list(env.VITE_RELAYS, [
  *  - cdn.nostrcheck.me : « Upload allowed », CORS complet
  *  - blossom.nostr.build / blossom.band : acceptent, mais analyse antivirus lente (> 30 s)
  *  - blossom.primal.net : accepte au HEAD, mais réponses d'erreur sans en-têtes CORS
+ *  - blossom.yakihonne.com : accepte, CORS complet (sonde du 1ᵉʳ nov. 2026)
  * Écartés : blosstr.com (abonnement payant), 24242.io, cdn.satellite.earth, files.sovbit.host.
  */
 export const DEFAULT_BLOSSOM_SERVERS = list(env.VITE_BLOSSOM_SERVERS, [
   'https://nostr.download',
   'https://cdn.nostrcheck.me',
+  'https://blossom.yakihonne.com',
   'https://blossom.nostr.build',
   'https://blossom.band',
   'https://blossom.primal.net',
@@ -55,6 +79,7 @@ export const DEFAULT_BLOSSOM_SERVERS = list(env.VITE_BLOSSOM_SERVERS, [
 
 /** Anciennes listes par défaut : un réglage identique n'est pas un choix de l'utilisateur. */
 export const LEGACY_DEFAULT_BLOSSOM_SERVERS = [
+  ['https://nostr.download', 'https://cdn.nostrcheck.me', 'https://blossom.nostr.build', 'https://blossom.band', 'https://blossom.primal.net'],
   [
     'https://blossom.nostr.build',
     'https://blossom.primal.net',
@@ -128,3 +153,24 @@ export const WALL_KINDS = [34236, 22]
 export const TERMS_VERSION = 1
 
 export const SOURCE_URL = 'https://github.com/deylac/freedom'
+
+/**
+ * Adresses de secours intégrées (docs/RESILIENCE.md). Compléter au déploiement : domaines dans
+ * plusieurs pays, passerelles IPFS par sous-domaine, Arweave, adresse .onion.
+ */
+export const MIRRORS = list(env.VITE_MIRRORS, ['https://deylac.github.io/freedom/'])
+
+/** Clé publique (hex ou npub) du projet, seule habilitée à publier la liste signée des miroirs. */
+export const PROJECT_PUBKEY = (() => {
+  const raw = (env.VITE_PROJECT_NPUB ?? '').trim()
+  if (/^[0-9a-f]{64}$/.test(raw)) return raw
+  if (raw.startsWith('npub1')) {
+    try {
+      const d = nip19.decode(raw)
+      if (d.type === 'npub') return d.data
+    } catch {
+      /* clé invalide : liste signée désactivée */
+    }
+  }
+  return ''
+})()

@@ -81,6 +81,8 @@ export function startRelay(port) {
     url: `ws://127.0.0.1:${port}`,
     events,
     received,
+    /** Dépose un événement signé comme s'il avait été publié plus tôt par quelqu'un d'autre. */
+    seed: (event) => store(event),
     close: () => new Promise((r) => wss.close(r)),
   }
 }

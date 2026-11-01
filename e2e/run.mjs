@@ -40,6 +40,8 @@ const C = await startBlossom(3003, { mirror: false }) // pas de BUD-04 → repli
 const D = await startBlossom(3004, { refuseUploads: true }) // refuse toute clé inconnue
 const E = await startBlossom(3005, { delayMs: 35_000 }) // antivirus lent : répond 35 s après réception (cas réel nostr.build)
 const OTS = await startOts(3010, 3011)
+const G = await startBlossom(3006) // serveur qui ne reçoit que des copies de préservation (bouton)
+const H = await startBlossom(3007) // idem (préservation automatique)
 
 const settings = {
   relays: [relay.url],
@@ -48,6 +50,7 @@ const settings = {
   installBannerDismissed: true,
   otsCalendars: [OTS.calendarUrl],
   btcExplorers: [OTS.explorerUrl],
+  autoPreserve: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +357,52 @@ await step('Horodatage Bitcoin : preuve dans imeta, en attente puis vérifiée, 
 })
 
 // ---------------------------------------------------------------------------
+// Résilience : réplication par les spectateurs (docs/RESILIENCE.md, R1)
+
+await step('Préservation : un spectateur copie la vidéo ; serveurs d’origine bloqués, lecture depuis la copie', async () => {
+  const sha = imeta(firstEvent).x[0]
+  const keeper = await newPage({ init: { ...settings, blossomServers: [A.base, G.base] } })
+  await keeper.goto(`${APP}#14octobre`)
+  const card = keeper.locator('[data-clip-key]').first()
+  await card.waitFor({ timeout: 10_000 })
+  await card.getByRole('button', { name: "Plus d'actions" }).click()
+  await keeper.getByTestId('preserve').click()
+  await keeper.getByText(/Copiée sur 1 serveur/).waitFor({ timeout: 20_000 })
+  assert.ok(G.blobs.has(sha), 'le serveur G ne détient pas la copie')
+  assert.ok(G.log.some((l) => l.path === '/mirror'), 'copie attendue de serveur à serveur (/mirror)')
+  const announce = await waitFor(() => relay.received.find((e) => e.kind === 1063 && tagOf(e, 'x')?.[1] === sha), 10_000, 'annonce NIP-94')
+  assert.ok(tagOf(announce, 'url')[1].startsWith(G.base))
+  const witnessKey = videoEvents()[0].pubkey
+  assert.notEqual(announce.pubkey, witnessKey)
+  await keeper.context().close()
+
+  // Un autre spectateur, qui ne connaît pas G, avec A, B et C bloqués : il doit trouver la copie via Nostr.
+  const page = await newPage({ mobile: true, init: { ...settings, blossomServers: [D.base] } })
+  await page.route(/127\.0\.0\.1:300[123]\//, (route) => route.abort('blockedbyclient'))
+  await page.goto(`${APP}#14octobre`)
+  const host = await playbackHost(page).catch(async (err) => {
+    const state = await page.evaluate(() => ({
+      text: document.body.innerText.slice(0, 400),
+      videos: [...document.querySelectorAll('video')].map((v) => ({ src: v.currentSrc, host: v.dataset.sourceHost, rs: v.readyState, paused: v.paused, err: v.error?.code })),
+    }))
+    console.log('    [diagnostic]', JSON.stringify(state), 'annonces 1063 :', relay.received.filter((e) => e.kind === 1063).length)
+    throw err
+  })
+  assert.equal(host, '127.0.0.1:3006')
+  await page.context().close()
+  return 'lecture depuis la copie de préservation (127.0.0.1:3006) découverte par NIP-94'
+})
+
+await step('Préservation automatique après 5 s de visionnage', async () => {
+  const sha = imeta(firstEvent).x[0]
+  const page = await newPage({ mobile: true, init: { ...settings, blossomServers: [A.base, H.base], autoPreserve: true } })
+  await page.goto(`${APP}#14octobre`)
+  await playbackHost(page)
+  await waitFor(() => H.blobs.has(sha), 20_000, 'copie automatique sur H')
+  await page.context().close()
+})
+
+// ---------------------------------------------------------------------------
 // Test 6 — Signalement
 
 await step('Signalement : kind 1984 (e, p, x) + PUT /report, vidéo masquée', async () => {
@@ -371,6 +420,98 @@ await step('Signalement : kind 1984 (e, p, x) + PUT /report, vidéo masquée', a
   assert.ok(tagOf(report, 'a'), 'tag a absent')
   const servers = [A, B, C].filter((s) => s.reports.length > 0).length
   assert.equal(servers, 3, `PUT /report reçu par ${servers}/3 serveurs`)
+})
+
+// ---------------------------------------------------------------------------
+// Résilience : adresses de secours (docs/RESILIENCE.md, R2)
+
+await step('Adresses de secours : liste signée par la clé du projet, faux miroir ignoré, aide si réseau bloqué', async () => {
+  const { finalizeEvent } = require('nostr-tools/pure')
+  const projectKey = new Uint8Array(32).fill(7) // clé de TEST (voir .env.e2e)
+  const list = (sk, url, at) =>
+    finalizeEvent({ kind: 30078, created_at: at, content: '', tags: [['d', 'hashwall-mirrors'], ['r', url, 'Miroir test']] }, sk)
+  relay.seed(list(projectKey, 'https://miroir-signe.example/', Math.floor(Date.now() / 1000) - 60))
+  // Un imposteur publie la même liste avec sa propre clé : elle doit être ignorée.
+  relay.seed(list(new Uint8Array(32).fill(9), 'https://miroir-piege.example/', Math.floor(Date.now() / 1000)))
+
+  const page = await newPage({ mobile: true })
+  await page.goto(`${APP}#secours`)
+  await page.waitForFunction(() => (localStorage.getItem('hw:mirrors') ?? '').includes('miroir-signe'), null, { timeout: 15_000 })
+  await page.getByRole('button', { name: 'Réglages' }).click()
+  await page.getByRole('button', { name: /Adresses de secours/ }).click()
+  const signed = page.locator('[data-testid=rescue] [data-source="signée"]')
+  await signed.waitFor({ timeout: 5_000 })
+  assert.match(await signed.innerText(), /miroir-signe\.example\/#secours/)
+  assert.equal(await page.locator('[data-mirror*="miroir-piege"]').count(), 0, 'miroir non signé par le projet affiché')
+  await signed.getByRole('button', { name: 'QR' }).click()
+  await signed.getByRole('img', { name: /QR code/ }).waitFor({ timeout: 3_000 })
+  await page.context().close()
+
+  // Réseau qui bloque tous les relais : le mur vide doit s'expliquer.
+  const blocked = await newPage({ mobile: true, init: { ...settings, relays: ['ws://127.0.0.1:9'] } })
+  await blocked.goto(`${APP}#secours`)
+  const banner = blocked.getByTestId('network-banner')
+  await banner.waitFor({ timeout: 25_000 })
+  assert.match(await banner.innerText(), /Aucun relais ne répond/)
+  await banner.getByRole('button', { name: /Adresses de secours/ }).click()
+  await blocked.getByTestId('network-help').waitFor({ timeout: 3_000 })
+  await blocked.context().close()
+  return 'liste signée retenue, liste d’un imposteur rejetée, bandeau « réseau bloqué » affiché'
+})
+
+// ---------------------------------------------------------------------------
+// Résilience : paquets hors ligne (docs/RESILIENCE.md, R3)
+
+await step('Hors ligne : paquet signé confié à un proche, vérifié puis publié par lui', async () => {
+  const witnessPage = await newPage({ mobile: true, init: { ...settings, termsAcceptedVersion: 1 }, extra: { 'hw:e2e:maxMs': '3000' } })
+  await witnessPage.goto(`${APP}#horsligne`)
+  await witnessPage.getByRole('button', { name: /Filmer pour #horsligne/ }).waitFor()
+  await witnessPage.context().setOffline(true)
+  await recordClip(witnessPage, 'horsligne')
+  await witnessPage.getByTestId('bundle-open').click({ timeout: 30_000 })
+  await witnessPage.getByTestId('bundle-name').waitFor({ timeout: 10_000 })
+  const [download] = await Promise.all([witnessPage.waitForEvent('download'), witnessPage.getByRole('button', { name: /Enregistrer le fichier/ }).click()])
+  mkdirSync(join(root, '..', 'e2e', 'artifacts'), { recursive: true })
+  const bundlePath = join(root, '..', 'e2e', 'artifacts', 'paquet.mp4')
+  await download.saveAs(bundlePath)
+  assert.match(download.suggestedFilename(), /^hashwall-horsligne-[0-9a-f]{8}\.mp4$/)
+  const witnessKey = await witnessPage.evaluate(() => JSON.parse(localStorage.getItem('hw:identity') ?? 'null'))
+  await witnessPage.context().close()
+  assert.ok(!videoEvents().some((e) => tagOf(e, 't')?.[1] === 'horsligne'), 'rien ne devait partir sans réseau')
+
+  // Un fichier altéré est refusé.
+  const bytes = readFileSync(bundlePath)
+  const tampered = Buffer.from(bytes)
+  tampered[2000] ^= 1
+  const tamperedPath = join(root, '..', 'e2e', 'artifacts', 'altere.mp4')
+  writeFileSync(tamperedPath, tampered)
+
+  // Le porteur, avec du réseau et sans rapport avec l'auteur.
+  const courier = await newPage({ mobile: true })
+  await courier.goto(`${APP}#horsligne`)
+  await courier.getByRole('button', { name: 'Réglages' }).click()
+  await courier.getByRole('button', { name: /Publier une vidéo reçue/ }).click()
+  await courier.getByTestId('bundle-file').setInputFiles(tamperedPath)
+  await courier.getByText(/a été modifiée/).waitFor({ timeout: 10_000 })
+  await courier.getByTestId('bundle-file').setInputFiles(bundlePath)
+  await courier.getByTestId('bundle-summary').waitFor({ timeout: 10_000 })
+  await courier.getByRole('button', { name: 'Publier sur le mur' }).click()
+  await courier.getByTestId('bundle-result').waitFor({ timeout: 30_000 })
+  const event = await waitFor(() => videoEvents().find((e) => tagOf(e, 't')?.[1] === 'horsligne'), 10_000, 'publication relayée')
+  const sha = imeta(event).x[0]
+  assert.equal(tagOf(event, 'd')[1], `hw-${sha.slice(0, 16)}`)
+  const { getPublicKey } = require('nostr-tools/pure')
+  const pubOf = (stored) => getPublicKey(Uint8Array.from(Buffer.from(stored.sk, 'hex')))
+  assert.equal(event.pubkey, pubOf(witnessKey), 'la vidéo doit rester signée par son auteur')
+  const courierKey = await courier.evaluate(() => JSON.parse(localStorage.getItem('hw:identity') ?? 'null'))
+  if (courierKey) assert.notEqual(event.pubkey, pubOf(courierKey))
+  assert.ok(!D.blobs.has(sha) && A.blobs.has(sha), 'envoi attendu sur A après le refus de D')
+  assert.ok(B.blobs.has(sha) || C.blobs.has(sha), 'au moins une copie de secours attendue')
+  await courier.keyboard.press('Escape')
+  await courier.keyboard.press('Escape')
+  const host = await playbackHost(courier)
+  await courier.context().close()
+  return `publiée par un tiers, signée par l’auteur ; lecture depuis ${host}`
 })
 
 // ---------------------------------------------------------------------------
@@ -661,7 +802,7 @@ await browser.close()
 // Fermeture bornée : une connexion restée ouverte ne doit jamais bloquer la fin de la suite.
 web.closeAllConnections?.()
 await Promise.race([
-  Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), E.close(), OTS.close(), new Promise((r) => web.close(r))]),
+  Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), E.close(), OTS.close(), G.close(), H.close(), new Promise((r) => web.close(r))]),
   new Promise((r) => setTimeout(r, 3000)),
 ])
 const failed = results.filter((r) => !r.ok)

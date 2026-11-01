@@ -3,6 +3,7 @@ import {
   DEFAULT_BTC_EXPLORERS,
   DEFAULT_OTS_CALENDARS,
   LEGACY_DEFAULT_BLOSSOM_SERVERS,
+  LEGACY_DEFAULT_RELAYS,
   DEFAULT_MODERATORS,
   DEFAULT_RELAYS,
   DEFAULT_REPORT_THRESHOLD,
@@ -27,6 +28,8 @@ export interface Settings {
   keepDeletionKeys: boolean
   termsAcceptedVersion: number
   installBannerDismissed: boolean
+  /** Copier automatiquement (de serveur à serveur) les vidéos regardées : chaque spectateur renforce le réseau. */
+  autoPreserve: boolean
   /** Calendriers OpenTimestamps (liste blanche : seuls ceux-ci sont contactés). */
   otsCalendars: string[]
   /** Explorateurs Bitcoin (API Esplora) utilisés pour vérifier les preuves. */
@@ -45,6 +48,7 @@ export const DEFAULT_SETTINGS: Settings = {
   keepDeletionKeys: true,
   termsAcceptedVersion: 0,
   installBannerDismissed: false,
+  autoPreserve: true,
   otsCalendars: DEFAULT_OTS_CALENDARS,
   btcExplorers: DEFAULT_BTC_EXPLORERS,
 }
@@ -64,6 +68,7 @@ export function loadOverrides(stored: Partial<Settings>): Partial<Settings> {
   if (out.blossomServers && LEGACY_DEFAULT_BLOSSOM_SERVERS.some((legacy) => same(legacy, out.blossomServers))) {
     delete out.blossomServers
   }
+  if (out.relays && LEGACY_DEFAULT_RELAYS.some((legacy) => same(legacy, out.relays))) delete out.relays
   for (const key of Object.keys(out) as (keyof Settings)[]) {
     if (same(out[key], DEFAULT_SETTINGS[key])) delete out[key]
   }

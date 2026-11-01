@@ -3,7 +3,8 @@
 Mur vidéo citoyen de 60 s : PWA 100 % client (React 19 + TypeScript + Vite 8 + Tailwind 4),
 index Nostr (NIP-71, kind 34236), stockage Blossom. Lire d'abord :
 - `docs/FEUILLE-DE-ROUTE.md` — prochaines tâches, **choix de conception déjà tranchés**, critères d'acceptation ;
-- `docs/ANGLES-MORTS.md` — risques connus, ce qui a été vérifié en conditions réelles.
+- `docs/ANGLES-MORTS.md` — risques connus, ce qui a été vérifié en conditions réelles ;
+- `docs/RESILIENCE.md` — anti-censure : ce qui est livré (R1–R4) et ce qui reste (R5 multi-origines, R6 P2P).
 
 ## Langue
 Interface, documentation, messages de commit et commentaires : **français**. Identifiants de code en anglais.
@@ -11,9 +12,9 @@ Interface, documentation, messages de commit et commentaires : **français**. Id
 ## Commandes
 ```bash
 npm run typecheck      # tsc --noEmit
-npm test               # Vitest (src/**/*.test.ts) — ~60 tests, < 2 s
+npm test               # Vitest (src/**/*.test.ts) — ~110 tests, < 3 s
 npm run build          # dist/ (CSP injectée, sw.js généré)
-npm run e2e            # build e2e + Playwright : relais et 5 serveurs Blossom simulés (~2 min)
+npm run e2e            # build e2e + Playwright : relais et 7 serveurs Blossom simulés (~5 min)
 E2E_FULL=1 npm run e2e # même chose avec la vraie limite de 60 s
 E2E_ONLY="Visages" node e2e/run.mjs  # un seul scénario indépendant (après npm run build:e2e)
 ```
@@ -45,6 +46,7 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 | Publication (2 voies), file IndexedDB | `src/lib/publish.ts`, `src/lib/storage/outbox.ts` |
 | État du mur, modération | `src/lib/wall-store.ts`, `src/lib/moderation/policy.ts` |
 | Lecteur anti-censure | `src/components/ResilientVideo.tsx` |
+| Résilience (R1–R3) | `src/lib/preserve.ts`, `mirrors.ts`, `bundle.ts`, `components/RescueSheet.tsx`, `NetworkBanner.tsx`, `BundleSheets.tsx` — voir `docs/RESILIENCE.md` |
 | Écrans | `src/components/` (`WallView`, `CaptureScreen`, `SettingsSheet`, `PublishTray`…) |
 | Config par défaut | `src/config.ts` (+ variables `VITE_*`, voir `.env.example`) |
 
@@ -72,6 +74,12 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
     auditée (le build échoue si l'URL de télémétrie change).
 11. OpenTimestamps : on horodate l'empreinte du **fichier** ; ne contacter que les calendriers de la
     liste blanche (`settings.otsCalendars`) ; jamais de vérification sans action de l'utilisateur.
+12. **Préservation et porteurs : clé jetable.** Une copie demandée par un spectateur (R1) ou un paquet
+    relayé par un porteur (R3) ne doit jamais être signé par l'identité de l'utilisateur. Les annonces
+    kind 1063 ne sont acceptées que si l'URL est https et **contient l'empreinte**.
+13. **Liste des miroirs** (kind 30078, `d=hashwall-mirrors`) : n'accepter que la clé `PROJECT_PUBKEY`.
+14. **Paquet hors ligne** : l'événement et l'autorisation sont signés par l'auteur ; le porteur publie
+    l'événement **tel quel** (jamais re-signé ni modifié).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la

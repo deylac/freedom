@@ -5,7 +5,10 @@ public accessible par une simple URL à fragment : `https://votre-domaine/#14oct
 
 - **100 % client** : aucune base de données, aucun fichier vidéo sur l'infrastructure de l'éditeur.
 - **Nostr (NIP-71)** pour l'index signé et le temps réel, **Blossom** pour le stockage adressé par le contenu.
-- **Anti-censure** : chaque vidéo est répliquée sur 3 serveurs ; le lecteur bascule seul si l'un est bloqué.
+- **Anti-censure** : chaque vidéo est répliquée sur 3 serveurs ; le lecteur bascule seul si l'un est bloqué ;
+  les **spectateurs multiplient les copies** des vidéos qu'ils regardent ; 16 relais indépendants ;
+  **adresses de secours** signées ; **paquets hors ligne** transmissibles par AirDrop/Bluetooth et publiés
+  par un tiers sans pouvoir être modifiés. Voir **[docs/RESILIENCE.md](docs/RESILIENCE.md)**.
 - **Anonymat matériel** : la vidéo passe par un `<canvas>` ; aucune position GPS ni information sur l'appareil n'est envoyée.
 
 > L'analyse des angles morts du cahier des charges (contradictions, risques non couverts, points
@@ -83,9 +86,9 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 
 ## Critères d'acceptation (§8)
 
-`npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et trois
-serveurs Blossom de test (sans `/mirror`, refusant les clés inconnues, ou répondant 35 s après réception). Dernier résultat : **18/18**, y compris avec la
-vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
+`npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et sept
+serveurs Blossom de test (dont : sans `/mirror`, refusant les clés inconnues, répondant 35 s après réception). Dernier résultat : **27/27** (limite de capture raccourcie ;
+la vraie limite de 60 s a été vérifiée avec `E2E_FULL=1 npm run e2e` lors d'un lot précédent).
 
 | Test du PRD | Vérification automatisée |
 |---|---|
@@ -100,6 +103,9 @@ vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
 | *Ajout* deux voies | un nouveau clip est publié pendant que le précédent se réplique |
 | *Ajout* diagnostic | refus d'un serveur et repli visibles dans Réglages → « Diagnostic du dernier envoi » |
 | *Bonus* suppression | kind 5 + `DELETE` sur les serveurs, vidéo retirée des murs ouverts |
+| *Résilience* préservation | un spectateur fait copier la vidéo (clé jetable, NIP-94) ; serveurs d'origine bloqués → lecture depuis la copie ; copie automatique après 5 s |
+| *Résilience* adresses de secours | liste signée par la clé du projet affichée (QR), liste d'un imposteur ignorée, bandeau « Aucun relais ne répond » |
+| *Résilience* hors ligne | sans réseau : paquet signé ; un tiers le vérifie (fichier altéré refusé) et le publie, la vidéo reste signée par son auteur |
 
 Ce qui n'a pas pu être testé ici (relais/serveurs réels, vrais téléphones) est listé dans
 [docs/ANGLES-MORTS.md §6](docs/ANGLES-MORTS.md#6-ce-qui-na-pas-pu-être-vérifié-ici).

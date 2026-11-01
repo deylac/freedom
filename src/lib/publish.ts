@@ -53,7 +53,8 @@ import {
   localSigner,
   type Signer,
 } from './nostr/signer'
-import { deleteJob, listJobs, putJob, type Diagnostic, type OutboxJob } from './storage/outbox'
+import { deleteJob, getJob, listJobs, putJob, type Diagnostic, type OutboxJob } from './storage/outbox'
+import { createBundle } from './bundle'
 import { markServerListPublished, removeMyClip, saveLastDiagnostics, saveMyClip, serverListPublished, type MyClip } from './storage/personal'
 import { getSettings } from './storage/settings'
 
@@ -599,6 +600,13 @@ class Publisher {
     this.progress.delete(id)
     await deleteJob(id)
     this.emit()
+  }
+
+  /** Paquet hors ligne (R3) d'une vidéo pas encore publiée : à confier à quelqu'un qui a du réseau. */
+  async bundle(id: string): Promise<File> {
+    const job = this.jobs.get(id) ?? (await getJob(id))
+    if (!job) throw new Error('Vidéo introuvable dans la file locale')
+    return createBundle(job, await signerForJob(job))
   }
 
   dismiss(id: string) {

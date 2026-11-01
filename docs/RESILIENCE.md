@@ -121,13 +121,70 @@ plafond par auteur, dédoublonnage, signalements vérifiés (preuve de travail),
 
 | # | Mesure | Où | Effort | État |
 |---|---|---|---|---|
-| R1 | Réplication par les spectateurs + annonces NIP-94 des copies | code | moyen | en cours |
-| R2 | Adresses de secours (liste intégrée + liste signée sur Nostr) + écran + diagnostic « réseau bloqué » | code | moyen | en cours |
-| R3 | Paquets hors ligne signés + partage natif + « Publier un paquet reçu » | code | élevé | à faire |
-| R4 | Découverte automatique de serveurs Blossom et de relais (10063, 10002, NIP-66) | code | moyen | à faire |
+| R1 | Réplication par les spectateurs + annonces NIP-94 des copies | code | moyen | ✅ livré (bouton + automatique) |
+| R2 | Adresses de secours (liste intégrée + liste signée sur Nostr) + écran + diagnostic « réseau bloqué » | code | moyen | ✅ livré — reste à **publier** la liste (clé du projet) |
+| R3 | Paquets hors ligne signés + partage natif + « Publier un paquet reçu » | code | élevé | ✅ livré |
+| R4 | Découverte automatique de serveurs Blossom et de relais (10063, 10002, NIP-66) | code | moyen | 🟠 partiel : 16 relais sondés, serveurs 10063 des auteurs utilisés pour les copies ; NIP-65/66 à faire |
 | R5 | Déploiement multi-origines (Codeberg, IPFS épinglé, Arweave, .onion) | exploitation | variable | nécessite des comptes de l'éditeur |
 | R6 | Pair-à-pair WebRTC entre spectateurs | code | élevé | plus tard |
 
 Ce qui dépend de l'éditeur (comptes, argent, serveurs) : noms de domaine dans plusieurs pays, comptes
 d'épinglage IPFS, jetons Arweave, petit serveur pour le miroir `.onion` et un relais communautaire,
 clé Nostr du projet (et ses dépositaires) pour signer la liste des miroirs.
+
+## 4. Ce qui est livré (1ᵉʳ nov. 2026)
+
+### R1 — Les spectateurs multiplient les copies
+- Menu d'une vidéo → **« Préserver cette vidéo »** ; réglage **« Préserver les vidéos que je regarde »**
+  (activé par défaut) : après 5 s de visionnage d'une vidéo sans signalement, copie de serveur à serveur
+  (`PUT /mirror`) vers 2 serveurs qui ne l'ont pas encore. Limites : une toutes les 20 s, 50 par jour,
+  jamais deux fois la même.
+- Jetons et annonce signés par une **clé jetable** : rien ne relie ce qu'un spectateur regarde à son identité.
+- Annonce NIP-94 (kind 1063, tags `url`/`fallback`/`x`) ; les lecteurs n'acceptent que des URL https
+  **contenant l'empreinte** (une annonce ne peut pas rediriger vers un autre fichier : le lecteur
+  télécharge par empreinte et les serveurs Blossom la vérifient).
+- Le lecteur ajoute ces copies à ses sources **même après avoir tout essayé** (testé : serveurs d'origine
+  bloqués, lecture depuis une copie découverte par Nostr).
+- Cibles : serveurs de l'utilisateur + serveurs déclarés (kind 10063) par les auteurs du mur.
+
+### R2 — Adresses de secours
+- `src/lib/mirrors.ts` : liste intégrée (`VITE_MIRRORS`) + **liste signée** kind 30078
+  (`d = hashwall-mirrors`) par la clé du projet (`VITE_PROJECT_NPUB`), mise en cache : une app déjà
+  installée apprend les nouvelles adresses par les relais même si toutes les anciennes sont bloquées.
+  Une liste signée par une autre clé est ignorée (testé).
+- Écran **Réglages → « Adresses de secours »** : adresses avec lien vers le mur courant, QR code local,
+  copie, partage ; conseils (Wi-Fi/données, VPN, Tor Browser, autres relais).
+- **Bandeau « Aucun relais ne répond »** après 12 s sans relais (ou « Hors ligne ») avec accès direct
+  à ces conseils : un mur vide ne passe plus pour un mur sans vidéos.
+- Publier la liste : `HASHWALL_PROJECT_NSEC=nsec1… node scripts/publish-mirrors.mjs "https://…|Libellé" …`
+  sur un ordinateur de confiance (republier la liste **complète** à chaque fois).
+
+### R3 — Hors ligne : stocker, transporter, publier
+- Envoi échoué (pas de réseau) → **« Confier la vidéo à un proche »** : un fichier `.mp4` **qui reste
+  une vidéo lisible**, auquel on ajoute une boîte MP4 `uuid` finale contenant l'événement kind 34236
+  **déjà signé** et une autorisation d'envoi BUD-11 signée, limitée à cette empreinte et aux serveurs
+  de l'auteur, valable 7 jours. Partage natif (AirDrop, Quick Share, Bluetooth…) ou enregistrement.
+- Le porteur : **Réglages → « Publier une vidéo reçue »**. Vérifications hors ligne : signature de
+  l'événement, empreinte de la vidéo, cohérence du `d`, autorisation (auteur, empreinte, expiration).
+  Il envoie le fichier une fois puis demande des copies de serveur à serveur, publie l'événement tel
+  quel et annonce les adresses réelles (NIP-94, clé jetable). Il ne peut rien modifier ni usurper.
+- Le paquet peut passer de main en main sans réseau (chaîne de porteurs), et transiter par BitChat ou
+  toute messagerie qui transporte des **fichiers** (pas les messageries qui recompressent les vidéos).
+- Limites : pas d'horodatage OpenTimestamps hors ligne (l'auteur peut republier plus tard : même `d`) ;
+  pas de vignette (le lecteur affiche la vidéo) ; Safari impose deux gestes (préparer, puis partager).
+
+### R4 — Plus de relais
+- 16 relais par défaut, tous vérifiés par la sonde depuis GitHub Actions (connexion, NIP-11, requête
+  kind 34236) ; 7 candidats écartés avec la raison dans `src/config.ts`. `blossom.yakihonne.com` ajouté
+  aux serveurs. Les anciennes listes par défaut sont oubliées automatiquement (`LEGACY_DEFAULT_RELAYS`).
+- À faire : relais déclarés par les auteurs (NIP-65), moniteurs de relais (NIP-66), test d'**écriture**
+  par la sonde (aujourd'hui elle ne fait que lire, pour ne rien publier).
+
+## 5. Ce qui reste hors de portée d'un navigateur, et pourquoi
+
+- **Maillage Bluetooth automatique** (BitChat) : iOS n'expose pas le Bluetooth aux sites web. Le
+  paquet hors ligne (R3) passe par le partage natif du système, qui, lui, utilise Bluetooth/Wi-Fi direct.
+- **Pair-à-pair WebRTC** (R6) : faisable, mais réseaux mobiles souvent incompatibles (CGNAT) sans serveur
+  TURN — qui redevient un point central. À réévaluer après des tests réels de R1–R3.
+- **Domaines, IPFS, Arweave, .onion** (R5) : demandent des comptes et un peu d'argent de l'éditeur ;
+  le code est prêt (base relative, routage par fragment, liste signée des miroirs).

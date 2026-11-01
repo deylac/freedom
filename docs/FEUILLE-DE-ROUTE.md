@@ -15,7 +15,7 @@ Effort conseillé : 🟢 moyen suffit (tout est spécifié) · 🟠 élevé cons
 | 5 | Floutage des visages sur iPhone (MediaPipe) | P1 | ✅ livré (modèle *full range* + tuiles) |
 | 6 | « Charger plus » (pagination des murs anciens) | P2 | ✅ livré |
 | 7 | Horodatage OpenTimestamps | P2 | ✅ livré — sur l'empreinte du **fichier**, pas NIP-03 (voir ANGLES-MORTS §8) |
-| 8 | **Résilience maximale** (miroirs, réplication par les spectateurs, hors ligne, P2P) | P0 | 📄 étude : `docs/RESILIENCE.md` |
+| 8 | **Résilience maximale** (miroirs, réplication par les spectateurs, hors ligne, P2P) | P0 | ✅ R1–R3 livrés, R4 partiel — détails et suite : `docs/RESILIENCE.md` §3–5 |
 | — | Décisions hors code (licence, juridique, collectif de modération, domaine) | P0 | — |
 
 > Les sections 3 à 7 ci-dessous décrivent la conception d'origine ; l'implémentation livrée la suit,
@@ -202,6 +202,8 @@ d'abord une sonde (cf. §2) avant de coder.
 - [ ] **Validation juridique** (LCEN, DSA, droit à l'image, CGU) avant tout lancement public.
 - [ ] **Collectif de modération** : publier une liste kind 10000 et renseigner `VITE_MODERATORS`.
 - [ ] **Nom de domaine** + miroir IPFS (passerelle par sous-domaine) ; publier les CID.
+- [ ] **Clé Nostr du projet** (garder la clé secrète hors ligne, plusieurs dépositaires) : renseigner
+  `VITE_PROJECT_NPUB` puis publier la liste des miroirs avec `scripts/publish-mirrors.mjs`.
 - [ ] Redéfinir le KPI « Time-to-Wall < 4 s » : irréaliste pour 16 Mo en 4G saturée (ANGLES-MORTS §1.2).
 
 ## Dette technique connue

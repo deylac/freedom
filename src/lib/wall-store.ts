@@ -4,11 +4,13 @@
  */
 import type { NostrEvent } from 'nostr-tools/pure'
 import { getPow } from 'nostr-tools/nip13'
+import { isAllowedMediaUrl } from './blossom/urls'
 import { MAX_CLIPS_PER_AUTHOR, REPORT_POW_BITS } from '../config'
 import {
   isNewerVersion,
   KIND_DELETION,
   KIND_LEGACY_SHORT_VIDEO,
+  KIND_FILE_METADATA,
   KIND_FOLLOWS,
   KIND_MUTE_LIST,
   KIND_REPORT,
@@ -63,6 +65,8 @@ export class WallStore {
   private pendingIdDeletions = new Map<string, Set<string>>()
   private addressDeletions = new Map<string, number>()
   private reports = new Map<string, Map<string, ReportInfo>>()
+  /** Copies annoncées (NIP-94, kind 1063) : empreinte → origines des serveurs qui la détiennent. */
+  private copies = new Map<string, Set<string>>()
   private follows = new Map<string, { at: number; pubkeys: string[] }>()
   private serverLists = new Map<string, { at: number; servers: string[] }>()
   private muteLists = new Map<string, { at: number; list: MuteList }>()
@@ -134,6 +138,8 @@ export class WallStore {
         return this.ingestMuteList(event)
       case KIND_FOLLOWS:
         return this.ingestFollows(event)
+      case KIND_FILE_METADATA:
+        return this.ingestCopies(event)
     }
   }
 
@@ -206,6 +212,33 @@ export class WallStore {
     const servers = event.tags.filter((t) => t[0] === 'server' && t[1]).map((t) => t[1])
     this.serverLists.set(event.pubkey, { at: event.created_at, servers })
     this.changed()
+  }
+
+  /** Annonce de copies : n'accepte que des URL https contenant l'empreinte (adressage Blossom). */
+  private ingestCopies(event: NostrEvent) {
+    const sha = event.tags.find((t) => t[0] === 'x')?.[1]
+    if (!sha || !/^[0-9a-f]{64}$/.test(sha)) return
+    const set = this.copies.get(sha) ?? new Set<string>()
+    const before = set.size
+    for (const [name, url] of event.tags) {
+      if ((name !== 'url' && name !== 'fallback') || !url || !url.includes(sha) || !isAllowedMediaUrl(url)) continue
+      if (set.size >= 20) break
+      set.add(new URL(url).origin)
+    }
+    this.copies.set(sha, set)
+    if (set.size !== before) this.changed()
+  }
+
+  /** Serveurs détenant une copie annoncée de ce fichier. */
+  copyServersOf(sha256: string | undefined): string[] {
+    return sha256 ? [...(this.copies.get(sha256) ?? [])] : []
+  }
+
+  /** Serveurs Blossom déclarés par les auteurs vus sur ce mur (découverte automatique). */
+  knownServers(): string[] {
+    const count = new Map<string, number>()
+    for (const { servers } of this.serverLists.values()) for (const s of servers) count.set(s, (count.get(s) ?? 0) + 1)
+    return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s)
   }
 
   /** Liste d'abonnements (kind 3) d'un modérateur : Web of Trust de profondeur 1. */

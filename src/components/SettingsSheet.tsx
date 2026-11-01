@@ -24,7 +24,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const lines = (s: string) => s.split(/[\s,]+/).map((l) => l.trim()).filter(Boolean)
 
-export function SettingsSheet({ onClose }: { onClose: () => void }) {
+export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => void; onRescue?: () => void; onImport?: () => void }) {
   const settings = useSettings()
   const toast = useToast()
   usePersonalVersion()
@@ -182,6 +182,25 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                 </li>
               ))}
             </ul>
+          )}
+        </Section>
+
+        <Section title="Résilience">
+          <Toggle
+            checked={settings.autoPreserve}
+            onChange={(v) => updateSettings({ autoPreserve: v })}
+            label="Préserver les vidéos que je regarde"
+            hint="Après 5 s de visionnage, demande à d’autres serveurs de copier la vidéo (de serveur à serveur : rien ne passe par votre forfait). Plus une vidéo est vue, plus elle est difficile à supprimer. Signé par une clé jetable."
+          />
+          {onRescue && (
+            <Button variant="ghost" className="mt-3" onClick={onRescue}>
+              Adresses de secours (si ce site est bloqué)
+            </Button>
+          )}
+          {onImport && (
+            <Button variant="ghost" className="mt-2" onClick={onImport}>
+              Publier une vidéo reçue (paquet hors ligne)
+            </Button>
           )}
         </Section>
 

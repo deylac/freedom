@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNow, useSettings } from '../hooks/basics'
 import { formatDuration, relativeTime } from '../lib/format'
 import { wallUrl } from '../lib/hashtag'
 import type { Verdict } from '../lib/moderation/policy'
+import { mayAutoPreserve, preservationPlan, preserveClip } from '../lib/preserve'
 import { clipNaddr, type Clip } from '../lib/nostr/events'
 import type { WallStore } from '../lib/wall-store'
 import { ResilientVideo, type SourceState } from './ResilientVideo'
@@ -13,12 +14,15 @@ import { shareLink, useToast } from './ui'
  * Serveurs à essayer pour un auteur : sa liste kind 10063 puis ceux configurés par l'utilisateur.
  * (Les serveurs par défaut ne sont pas réajoutés : un utilisateur qui les a retirés ne veut pas les contacter.)
  */
-export function useExtraServers(store: WallStore | null, pubkey: string): string[] {
+export function useExtraServers(store: WallStore | null, clip: Clip): string[] {
   const settings = useSettings()
-  const authorServers = store?.serversOf(pubkey) ?? []
-  const key = authorServers.join(' ')
+  // Copies annoncées par des spectateurs (NIP-94) en premier : ce sont les plus récentes.
+  const copyServers = store?.copyServersOf(clip.video.sha256) ?? []
+  const authorServers = store?.serversOf(clip.pubkey) ?? []
+  const key = [...copyServers, ...authorServers].join(' ')
   return useMemo(
-    () => [...new Set([...authorServers, ...settings.blossomServers])],
+    () => [...new Set([...copyServers, ...authorServers, ...settings.blossomServers])],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, settings.blossomServers],
   )
 }
@@ -102,9 +106,22 @@ export function FeedItem({
 }) {
   const [revealed, setRevealed] = useState(false)
   const [source, setSource] = useState<SourceState | null>(null)
-  const extraServers = useExtraServers(store, clip.pubkey)
+  const extraServers = useExtraServers(store, clip)
   const share = useShare(clip, tag)
   const masked = verdict.status === 'warn' && !revealed
+
+  // Préservation automatique : après 5 s de visionnage d'une vidéo sans aucun signalement,
+  // copie de serveur à serveur (aucun coût pour le forfait ; clé jetable).
+  const playing = active && source?.url ? source.url : null
+  useEffect(() => {
+    if (!playing || verdict.status !== 'visible' || verdict.unverified > 0) return
+    const id = setTimeout(() => {
+      if (!mayAutoPreserve(clip.video.sha256)) return
+      const plan = preservationPlan(clip, store?.copyServersOf(clip.video.sha256) ?? [], store?.knownServers() ?? [], playing)
+      void preserveClip(clip, plan.sources, plan.holders, plan.candidates, 2).catch(() => {})
+    }, 5000)
+    return () => clearTimeout(id)
+  }, [playing, clip, store, verdict])
 
   return (
     <section
@@ -174,7 +191,7 @@ export function ClipCard({
   const [warm, setWarm] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [source, setSource] = useState<SourceState | null>(null)
-  const extraServers = useExtraServers(store, clip.pubkey)
+  const extraServers = useExtraServers(store, clip)
   const masked = verdict.status === 'warn' && !revealed
 
   return (

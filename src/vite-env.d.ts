@@ -10,4 +10,6 @@ interface ImportMetaEnv {
   readonly VITE_REPORT_THRESHOLD?: string
   readonly VITE_OTS_CALENDARS?: string
   readonly VITE_BTC_EXPLORERS?: string
+  readonly VITE_MIRRORS?: string
+  readonly VITE_PROJECT_NPUB?: string
 }

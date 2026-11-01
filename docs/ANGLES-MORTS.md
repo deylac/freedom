@@ -124,3 +124,15 @@ Légende : ✅ traité dans le code · ⚠️ atténué, limite résiduelle · �
 | 8.6 | Les calendriers OTS renvoient leurs 404 sans CORS (illisibles) mais leurs 200 avec CORS : la mise à niveau depuis un navigateur est possible (vérifié sur une vraie preuve de 2016). | ✅ |
 | 8.7 | Voix : un décalage de hauteur serait réversible. | ✅ Vocodeur à porteuse fixe ; mesuré : sortie à 110 Hz quelle que soit l'entrée. Limite : mots, accent et débit restent identifiants. |
 | 8.8 | Preuve de travail des signalements : 20 bits ≈ quelques secondes sur téléphone mais une fraction de seconde sur un PC. | ⚠️ Ralentisseur seulement ; la protection réelle vient des modérateurs et de leurs contacts. |
+
+## 9. Constats du lot « résilience » (1ᵉʳ nov. 2026)
+
+| # | Constat | Traitement |
+|---|---|---|
+| 9.1 | Le lecteur abandonnait définitivement une vidéo après avoir essayé toutes ses sources, même si une copie était annoncée ensuite ; et une source insérée **avant** les autres décalait les positions (on retombait sur un serveur déjà en échec). | ✅ Suivi des URL déjà essayées ; reprise automatique sur toute nouvelle source ; la source en cours est conservée si la liste change. Test E2E « serveurs d'origine bloqués, lecture depuis la copie ». |
+| 9.2 | Une annonce de copie (NIP-94) pourrait servir à faire contacter un serveur choisi par un attaquant (pistage d'IP). | ⚠️ Limité : URL https contenant l'empreinte, 20 origines max par fichier, essayées seulement après les sources déclarées par l'auteur. C'est le prix de la réplication ouverte ; à pondérer par la confiance (modérateurs) si abus constaté. |
+| 9.3 | Un miroir piégé pourrait s'annoncer comme « adresse de secours ». | ✅ Seule la liste signée par la clé du projet est acceptée (testé avec une liste signée par une autre clé). Risque résiduel : la clé du projet elle-même (à garder hors ligne). |
+| 9.4 | Paquet hors ligne : un porteur malveillant pourrait garder la vidéo sans la publier, ou la diffuser ailleurs. | ⚠️ Inévitable (il a le fichier) ; l'interface le dit. Il ne peut en revanche ni modifier la vidéo ni le texte, ni changer l'auteur : vérifié (empreinte, signature, autorisation liée à l'auteur). |
+| 9.5 | Les messageries qui recompressent les vidéos détruisent le paquet (et l'empreinte). | ⚠️ Message « envoyer comme fichier » ; le fichier refusé est signalé clairement au porteur. |
+| 9.6 | Web Share sur Safari exige un geste utilisateur **immédiat** : signer puis partager dans le même clic échouerait. | ✅ Deux temps : préparation à l'ouverture de la feuille, partage sur un second geste. |
+| 9.7 | Mur vide quand le réseau bloque les relais : indiscernable d'un mur sans vidéos. | ✅ Bandeau après 12 s sans relais, conseils et adresses de secours (testé avec un relais injoignable). |

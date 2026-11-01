@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { Filter } from 'nostr-tools/filter'
 import { WALL_KINDS } from '../config'
-import { clipKeyFromPointer, KIND_DELETION, KIND_FOLLOWS, KIND_MUTE_LIST, KIND_REPORT, KIND_SERVER_LIST } from '../lib/nostr/events'
+import { clipKeyFromPointer, KIND_DELETION, KIND_FILE_METADATA, KIND_FOLLOWS, KIND_MUTE_LIST, KIND_REPORT, KIND_SERVER_LIST } from '../lib/nostr/events'
 import { LiveSubscription, queryOnce } from '../lib/nostr/pool'
 import { identityPubkey } from '../lib/nostr/signer'
 import { hiddenKeys, localMutes } from '../lib/storage/personal'
@@ -114,7 +114,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
     const t = JSON.parse(debouncedKey) as ReturnType<WallStore['annotationTargets']>
     const filters: Filter[] = []
     // Paquets de 150 valeurs : certains relais refusent les filtres trop longs.
-    for (const hashes of chunks(t.hashes)) filters.push({ kinds: [KIND_REPORT], '#x': hashes })
+    for (const hashes of chunks(t.hashes)) filters.push({ kinds: [KIND_REPORT, KIND_FILE_METADATA], '#x': hashes })
     for (const ids of chunks(t.ids)) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#e': ids })
     for (const addresses of chunks(t.addresses)) filters.push({ kinds: [KIND_REPORT, KIND_DELETION], '#a': addresses })
     for (const pubkeys of chunks(t.pubkeys)) filters.push({ kinds: [KIND_SERVER_LIST], authors: pubkeys })
