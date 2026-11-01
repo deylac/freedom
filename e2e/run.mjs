@@ -36,10 +36,11 @@ const relay = startRelay(7777)
 const A = await startBlossom(3001)
 const B = await startBlossom(3002)
 const C = await startBlossom(3003, { mirror: false }) // pas de BUD-04 → repli envoi direct
+const D = await startBlossom(3004, { refuseUploads: true }) // refuse toute clé inconnue (cas réel nostr.build)
 
 const settings = {
   relays: [relay.url],
-  blossomServers: [A.base, B.base, C.base],
+  blossomServers: [D.base, A.base, B.base, C.base],
   termsAcceptedVersion: 0,
   installBannerDismissed: true,
 }
@@ -172,6 +173,17 @@ await step('Réplication : /mirror sur B, repli envoi direct sur C (sans BUD-04)
   assert.ok(C.blobs.has(sha), 'C ne détient pas la vidéo (repli)')
 })
 
+await step('Diagnostic : refus du 1er serveur et repli visibles dans les Réglages', async () => {
+  assert.ok(D.log.some((l) => l.method === 'HEAD' && l.path === '/upload'), 'le serveur qui refuse n’a pas été essayé en premier')
+  await witness.getByRole('button', { name: 'Réglages' }).click()
+  const text = await witness.getByTestId('diagnostics').innerText()
+  await witness.keyboard.press('Escape')
+  assert.match(text, /127\.0\.0\.1:3004[^\n]*HTTP 401/, 'refus HTTP 401 absent')
+  assert.match(text, /127\.0\.0\.1:3001[^\n]*primaire/)
+  assert.match(text, /127\.0\.0\.1:3003[^\n]*envoi direct/)
+  return text.split('\n').length + ' lignes'
+})
+
 await step('Événement NIP-71 : kind 34236, d stable, imeta complet, v2 avec fallback', async () => {
   const versions = videoEvents()
   assert.ok(versions.length >= 2, `attendu v1 + v2, reçu ${versions.length}`)
@@ -235,6 +247,31 @@ async function playbackHost(page) {
   )
   return page.evaluate(() => document.querySelector('video[data-source-host]').dataset.sourceHost)
 }
+
+await step('Autoplay refusé (iOS économie d’énergie) : bouton « Lire », pas de fausse bascule', async () => {
+  const page = await newPage({ mobile: true })
+  // Simule Safari en mode économie d'énergie : play() refusé tant qu'aucun geste de l'utilisateur.
+  await page.addInitScript(() => {
+    let gesture = false
+    window.addEventListener('pointerdown', () => (gesture = true), true)
+    const original = HTMLMediaElement.prototype.play
+    HTMLMediaElement.prototype.play = function () {
+      if (!gesture) return Promise.reject(new DOMException('autoplay refusé', 'NotAllowedError'))
+      return original.call(this)
+    }
+  })
+  await page.goto(`${APP}#14octobre`)
+  await page.getByTestId('tap-to-play').waitFor({ timeout: 10_000 })
+  await page.waitForTimeout(9_000) // plus que le délai de bascule (7 s)
+  const host = await page.evaluate(() => document.querySelector('video[data-source-host]')?.dataset.sourceHost)
+  assert.equal(host, '127.0.0.1:3001', `bascule à tort vers ${host}`)
+  assert.equal(await page.getByText(/Vidéo introuvable/).count(), 0, 'déclarée introuvable à tort')
+  await page.getByTestId('tap-to-play').click()
+  const playing = await playbackHost(page)
+  assert.equal(playing, '127.0.0.1:3001')
+  await page.context().close()
+  return 'reste sur le primaire, lecture au toucher'
+})
 
 await step('Censure (requête bloquée) : bascule immédiate sur un miroir', async () => {
   const page = await newPage({ mobile: true })
@@ -308,7 +345,7 @@ await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', 
 // ---------------------------------------------------------------------------
 
 await browser.close()
-await Promise.all([relay.close(), A.close(), B.close(), C.close(), new Promise((r) => web.close(r))])
+await Promise.all([relay.close(), A.close(), B.close(), C.close(), D.close(), new Promise((r) => web.close(r))])
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length}/${results.length} tests réussis${mimeUsed ? ` — format enregistré par Chromium : ${mimeUsed}` : ''}\n`)
 process.exit(failed.length ? 1 : 0)

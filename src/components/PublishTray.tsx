@@ -1,22 +1,49 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useWakeLock } from '../hooks/basics'
 import { formatBytes } from '../lib/format'
 import { publisher } from '../lib/publish'
+import type { Diagnostic } from '../lib/storage/outbox'
 import { IconCheck, IconClose, IconRetry, IconTrash } from './icons'
+
+/** Résultat serveur par serveur de la dernière publication (refus compris). */
+export function DiagnosticList({ items }: { items: Diagnostic[] }) {
+  if (items.length === 0) return <p className="text-xs text-muted">Aucun serveur contacté.</p>
+  return (
+    <ul className="space-y-1 text-xs" data-testid="diagnostics">
+      {items.map((d, i) => (
+        <li key={`${d.server}-${d.step}-${i}`} className="flex gap-2">
+          <span className={d.ok ? 'text-ok' : 'text-rec'}>{d.ok ? '✓' : '✗'}</span>
+          <span className="min-w-0 break-words text-white/85">
+            <span className="font-semibold text-white">{d.server}</span> <span className="text-muted">({d.step})</span> : {d.detail}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 /** Suivi des envois en cours (file persistante, reprise automatique). */
 export function PublishTray() {
   const jobs = useSyncExternalStore(publisher.subscribe, publisher.getSnapshot)
   const busy = jobs.some((j) => j.state !== 'done' && j.progress.stage !== 'error')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   useWakeLock(busy)
 
-  // Les confirmations disparaissent seules.
+  // Les confirmations disparaissent seules, sauf si l'on consulte leurs détails.
   useEffect(() => {
-    const done = jobs.filter((j) => j.state === 'done')
+    const done = jobs.filter((j) => j.state === 'done' && !expanded.has(j.id))
     if (done.length === 0) return
     const id = setTimeout(() => done.forEach((j) => publisher.dismiss(j.id)), 8000)
     return () => clearTimeout(id)
-  }, [jobs])
+  }, [jobs, expanded])
+
+  const toggle = (id: string) =>
+    setExpanded((set) => {
+      const next = new Set(set)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   if (jobs.length === 0) return null
   return (
@@ -26,6 +53,7 @@ export function PublishTray() {
         const pct = p.sent !== undefined && p.total ? Math.round((p.sent / p.total) * 100) : null
         const failed = p.stage === 'error'
         const done = job.state === 'done'
+        const refusals = job.diagnostics.filter((d) => !d.ok).length
         const ttw =
           job.timings.publishedAt && job.timings.recordedAt
             ? ((job.timings.publishedAt - job.timings.recordedAt) / 1000).toFixed(1).replace('.', ',')
@@ -42,7 +70,7 @@ export function PublishTray() {
                 </p>
                 <p className="truncate text-xs text-muted">
                   {done
-                    ? `${ttw ? `envoi ${ttw} s · ` : ''}${job.mirrors} miroir${job.mirrors > 1 ? 's' : ''}`
+                    ? `${ttw ? `envoi ${ttw} s · ` : ''}${job.mirrors} miroir${job.mirrors > 1 ? 's' : ''}${refusals ? ` · ${refusals} refus` : ''}`
                     : failed
                       ? 'Conservée sur l’appareil : nouvel essai possible.'
                       : pct !== null
@@ -74,6 +102,16 @@ export function PublishTray() {
               </div>
             )}
             {failed && job.error && <p className="mt-2 max-h-24 overflow-y-auto whitespace-pre-line text-xs text-rec/90">{job.error}</p>}
+            {job.diagnostics.length > 0 && !failed && (
+              <button onClick={() => toggle(job.id)} className="mt-1.5 text-xs font-semibold text-accent" aria-expanded={expanded.has(job.id)}>
+                {expanded.has(job.id) ? 'Masquer les détails' : 'Détails par serveur'}
+              </button>
+            )}
+            {expanded.has(job.id) && (
+              <div className="mt-2 max-h-48 overflow-y-auto rounded-xl bg-night/80 p-2.5">
+                <DiagnosticList items={job.diagnostics} />
+              </div>
+            )}
           </div>
         )
       })}

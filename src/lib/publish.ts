@@ -49,8 +49,8 @@ import {
   localSigner,
   type Signer,
 } from './nostr/signer'
-import { deleteJob, listJobs, putJob, type OutboxJob } from './storage/outbox'
-import { markServerListPublished, removeMyClip, saveMyClip, serverListPublished, type MyClip } from './storage/personal'
+import { deleteJob, listJobs, putJob, type Diagnostic, type OutboxJob } from './storage/outbox'
+import { markServerListPublished, removeMyClip, saveLastDiagnostics, saveMyClip, serverListPublished, type MyClip } from './storage/personal'
 import { getSettings } from './storage/settings'
 
 export type Stage = 'queued' | 'checking' | 'uploading' | 'publishing' | 'mirroring' | 'done' | 'error'
@@ -123,6 +123,47 @@ async function signerForJob(job: OutboxJob): Promise<Signer> {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostic lisible des échecs serveur
+
+const STATUS_HINTS: Record<number, string> = {
+  401: 'autorisation refusée (clé inconnue ou liste blanche)',
+  402: 'paiement requis',
+  403: 'interdit par la politique du serveur',
+  404: 'fonction absente',
+  405: 'fonction absente',
+  409: 'empreinte différente',
+  411: 'taille requise',
+  413: 'fichier trop volumineux',
+  415: 'type de fichier refusé',
+  429: 'trop de requêtes',
+  502: 'le serveur n’a pas pu récupérer la source',
+  503: 'service indisponible',
+}
+
+export function describeError(err: unknown): string {
+  if (err instanceof BlossomError) {
+    const reason = err.reason ? ` — ${err.reason}` : ''
+    switch (err.kind) {
+      case 'rejected':
+        return `HTTP ${err.status}${STATUS_HINTS[err.status] ? ` : ${STATUS_HINTS[err.status]}` : ''}${reason}`
+      case 'timeout':
+        return `pas de réponse (délai dépassé)${reason}`
+      case 'network':
+        return 'connexion impossible ou bloquée par CORS'
+      case 'mismatch':
+        return `le serveur a modifié le fichier${reason}`
+      case 'aborted':
+        return 'annulé'
+    }
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+function diag(job: OutboxJob, server: string, step: 'envoi' | 'miroir', ok: boolean, detail: string) {
+  ;(job.diagnostics ??= []).push({ server: hostOf(server), step, ok, detail })
+}
+
+// ---------------------------------------------------------------------------
 // Étapes
 
 async function uploadPrimary(
@@ -134,7 +175,6 @@ async function uploadPrimary(
 ): Promise<{ server: string; descriptor: BlobDescriptor }> {
   const blob = job.videoBlob
   if (!blob) throw new Error('Fichier vidéo introuvable dans la file locale')
-  const errors: string[] = []
   for (const server of targets) {
     if (signal.aborted) throw new BlossomError(server, 'aborted')
     onProgress({ stage: 'checking', message: `Vérification de ${hostOf(server)}…` })
@@ -142,13 +182,13 @@ async function uploadPrimary(
     try {
       const pre = await preflightUpload(server, { sha256: job.video.sha256, size: job.video.size, type: job.video.mime }, token, { signal })
       if (!pre.ok) {
-        errors.push(`${hostOf(server)} : refus HTTP ${pre.status}${pre.reason ? ` (${pre.reason})` : ''}`)
+        diag(job, server, 'envoi', false, `pré-vérification ${describeError(new BlossomError(server, 'rejected', pre.status, pre.reason))}`)
         continue
       }
     } catch (err) {
-      if (err instanceof BlossomError && (err.kind === 'aborted')) throw err
+      if (err instanceof BlossomError && err.kind === 'aborted') throw err
       if (err instanceof BlossomError && err.kind === 'timeout') {
-        errors.push(`${hostOf(server)} : injoignable`)
+        diag(job, server, 'envoi', false, `pré-vérification : ${describeError(err)}`)
         continue
       }
       // Erreur réseau rapide (souvent CORS sur HEAD) : on tente quand même l'envoi.
@@ -164,13 +204,15 @@ async function uploadPrimary(
         onProgress: (sent, total) =>
           onProgress({ stage: 'uploading', message: `Envoi vers ${hostOf(server)}`, sent, total }),
       })
+      diag(job, server, 'envoi', true, preflightUnknown ? 'accepté (pré-vérification impossible)' : 'accepté — serveur primaire')
       return { server, descriptor }
     } catch (err) {
       if (err instanceof BlossomError && err.kind === 'aborted') throw err
-      errors.push(`${hostOf(server)} : ${err instanceof Error ? err.message : String(err)}${preflightUnknown ? ' (pré-vérification impossible)' : ''}`)
+      diag(job, server, 'envoi', false, `${describeError(err)}${preflightUnknown ? ' (pré-vérification impossible)' : ''}`)
     }
   }
-  throw new Error(`Aucun serveur Blossom n'a accepté la vidéo.\n${errors.join('\n')}`)
+  const lines = (job.diagnostics ?? []).filter((d) => d.step === 'envoi').map((d) => `${d.server} : ${d.detail}`)
+  throw new Error(`Aucun serveur Blossom n'a accepté la vidéo.\n${lines.join('\n')}`)
 }
 
 async function uploadPoster(job: OutboxJob, targets: string[], token: Awaited<ReturnType<typeof createAuthToken>>, signal: AbortSignal) {
@@ -196,18 +238,23 @@ async function replicate(
   blob: Blob | undefined,
   token: Awaited<ReturnType<typeof createAuthToken>>,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<{ url: string; via: 'mirror' | 'upload' }> {
   try {
     const d = await mirrorBlob(server, sourceUrl, { sha256: info.sha256, type: info.mime, size: info.size, token, signal })
-    return d.url
+    return { url: d.url, via: 'mirror' }
   } catch (err) {
     if (!(err instanceof BlossomError) || err.kind === 'aborted' || err.kind === 'mismatch') throw err
     const fallbackOk = err.kind === 'network' || err.kind === 'timeout' || MIRROR_UNSUPPORTED.has(err.status)
-    if (!blob || !fallbackOk) throw err
-    const pre = await preflightUpload(server, { sha256: info.sha256, size: info.size, type: info.mime }, token, { signal }).catch(() => ({ ok: true }) as const)
-    if (!pre.ok) throw err
-    const d = await uploadBlob(server, blob, { sha256: info.sha256, type: info.mime, token, signal })
-    return d.url
+    if (!blob || !fallbackOk) throw new Error(`/mirror : ${describeError(err)}`)
+    try {
+      const pre = await preflightUpload(server, { sha256: info.sha256, size: info.size, type: info.mime }, token, { signal }).catch(() => ({ ok: true }) as const)
+      if (!pre.ok) throw new BlossomError(server, 'rejected', pre.status, pre.reason)
+      const d = await uploadBlob(server, blob, { sha256: info.sha256, type: info.mime, token, signal })
+      return { url: d.url, via: 'upload' }
+    } catch (err2) {
+      if (err2 instanceof BlossomError && err2.kind === 'aborted') throw err2
+      throw new Error(`/mirror : ${describeError(err)} ; envoi direct : ${describeError(err2)}`)
+    }
   }
 }
 
@@ -275,6 +322,8 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
   if (targets.length === 0) throw new Error('Aucun serveur Blossom configuré')
   if (job.video.size > MAX_UPLOAD_BYTES * 5) throw new Error('Fichier trop volumineux')
   job.attempts++
+  // Un nouvel essai refait les étapes non terminées : on ne garde que le diagnostic des étapes acquises.
+  job.diagnostics = job.primary ? (job.diagnostics ?? []).filter((d) => d.step === 'envoi') : []
   const signer = await signerForJob(job)
   const blobs = [job.video.sha256, ...(job.poster ? [job.poster.sha256] : [])]
   const token = await createAuthToken(signer, 'upload', { sha256: blobs, servers: targets })
@@ -313,16 +362,19 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
     if (job.mirrors.length >= MIRROR_TARGET) break
     if (job.servers.includes(server)) continue
     try {
-      const url = await replicate(server, primary.url, job.video, job.videoBlob, token, signal)
+      onProgress({ stage: 'mirroring', message: `Réplication vers ${hostOf(server)}…` })
+      const { url, via } = await replicate(server, primary.url, job.video, job.videoBlob, token, signal)
       job.mirrors.push(url)
       job.servers.push(server)
+      diag(job, server, 'miroir', true, via === 'mirror' ? 'répliqué via /mirror' : 'répliqué par envoi direct (/mirror indisponible)')
       if (job.posterUrl && job.poster) {
-        const posterUrl = await replicate(server, job.posterUrl, job.poster, job.posterBlob, token, signal).catch(() => undefined)
-        if (posterUrl) job.posterMirrors.push(posterUrl)
+        const poster = await replicate(server, job.posterUrl, job.poster, job.posterBlob, token, signal).catch(() => undefined)
+        if (poster) job.posterMirrors.push(poster.url)
       }
       await putJob(job)
     } catch (err) {
       if (err instanceof BlossomError && err.kind === 'aborted') throw err
+      diag(job, server, 'miroir', false, err instanceof Error ? err.message : String(err))
     }
   }
   job.timings.mirroredAt = Date.now()
@@ -344,6 +396,7 @@ export async function runJob(job: OutboxJob, onProgress: (p: Progress) => void, 
 
   // 7. Liste de serveurs de l'identité
   await publishServerList(signer, job.servers)
+  saveLastDiagnostics({ at: Date.now(), tag: job.tag, items: job.diagnostics ?? [] })
 
   job.state = 'done'
   // Les octets ne sont plus nécessaires : on les efface (saisie du téléphone).
@@ -366,6 +419,7 @@ export interface JobView {
   createdAt: number
   timings: OutboxJob['timings']
   mirrors: number
+  diagnostics: Diagnostic[]
 }
 
 type Listener = () => void
@@ -397,6 +451,7 @@ class Publisher {
       createdAt: j.createdAt,
       timings: j.timings,
       mirrors: j.mirrors.length,
+      diagnostics: [...(j.diagnostics ?? [])],
     }))
     this.snapshot = [...live, ...this.recent.filter((r) => !this.jobs.has(r.id))]
     this.listeners.forEach((l) => l())
@@ -454,6 +509,7 @@ class Publisher {
         createdAt: job.createdAt,
         timings: job.timings,
         mirrors: job.mirrors.length,
+        diagnostics: [...(job.diagnostics ?? [])],
       }
       this.recent = [finished, ...this.recent].slice(0, 5)
       this.jobs.delete(id)

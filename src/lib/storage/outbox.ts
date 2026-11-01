@@ -16,6 +16,14 @@ export interface BlobInfo {
   size: number
 }
 
+/** Résultat d'une étape sur un serveur : rend visibles les refus même quand l'envoi a réussi ailleurs. */
+export interface Diagnostic {
+  server: string
+  step: 'envoi' | 'miroir'
+  ok: boolean
+  detail: string
+}
+
 export interface OutboxJob {
   id: string
   createdAt: number
@@ -39,6 +47,7 @@ export interface OutboxJob {
   eventCreatedAt?: number
   lastError?: string
   attempts: number
+  diagnostics?: Diagnostic[]
   timings: { recordedAt: number; uploadedAt?: number; publishedAt?: number; mirroredAt?: number }
 }
 

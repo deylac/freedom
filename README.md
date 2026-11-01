@@ -82,7 +82,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 ## Critères d'acceptation (§8)
 
 `npm run e2e` exécute ces scénarios dans Chromium avec une caméra simulée, contre un relais et trois
-serveurs Blossom de test (l'un sans `/mirror`). Dernier résultat : **14/14**, y compris avec la
+serveurs Blossom de test (l'un sans `/mirror`, l'autre qui refuse les clés inconnues). Dernier résultat : **16/16**, y compris avec la
 vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
 
 | Test du PRD | Vérification automatisée |
@@ -93,6 +93,8 @@ vraie limite de 60 s (`E2E_FULL=1 npm run e2e`).
 | Temps réel multi-utilisateurs | apparition sur un autre écran sans rechargement, ≈ 3,2 s après la fin de l'enregistrement dont 3 s d'aperçu (réseau local : n'inclut pas le temps d'envoi réel en 4G) |
 | Résistance à la censure | primaire bloqué → lecture depuis un miroir en 0,3 s ; primaire en « trou noir » → 7,2 s |
 | Signalement | kind 1984 avec `e`, `p`, `x` (+ `a`) sur les relais, `PUT /report` sur les 3 serveurs, vidéo masquée |
+| *Ajout* autoplay refusé | lecture automatique bloquée (iPhone en économie d'énergie) : bouton « Lire », aucune fausse bascule |
+| *Ajout* diagnostic | refus d'un serveur et repli visibles dans Réglages → « Diagnostic du dernier envoi » |
 | *Bonus* suppression | kind 5 + `DELETE` sur les serveurs, vidéo retirée des murs ouverts |
 
 Ce qui n'a pas pu être testé ici (relais/serveurs réels, vrais téléphones) est listé dans

@@ -5,7 +5,7 @@ import { verifyEvent } from 'nostr-tools/pure'
 
 const EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'image/jpeg': 'jpg' }
 
-export function startBlossom(port, { mirror = true } = {}) {
+export function startBlossom(port, { mirror = true, refuseUploads = false } = {}) {
   const base = `http://127.0.0.1:${port}`
   const blobs = new Map()
   const log = []
@@ -64,6 +64,10 @@ export function startBlossom(port, { mirror = true } = {}) {
     const deny = (status, reason) => send(status, '', { 'X-Reason': reason })
 
     if (req.method === 'OPTIONS') return send(204, '')
+
+    if (refuseUploads && (url.pathname === '/upload' || url.pathname === '/mirror')) {
+      return deny(401, 'pubkey not whitelisted')
+    }
 
     if (url.pathname === '/upload' && req.method === 'HEAD') {
       const sha = req.headers['x-sha-256']

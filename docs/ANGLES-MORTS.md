@@ -69,9 +69,15 @@ Légende : ✅ traité dans le code · ⚠️ atténué, limite résiduelle · �
 | 5.2 | Navigateurs intégrés (Instagram, Facebook, WhatsApp) : caméra souvent bloquée — or le QR code est souvent partagé par ces applis. | ✅ Détection et message « Ouvrez dans Safari/Chrome ». |
 | 5.3 | WebM illisible sur les anciens iOS. | ✅ Sélection de variante via `canPlayType`, préférence MP4. ⚠️ Une vidéo WebM publiée depuis Firefox reste illisible sur un vieil iPhone. |
 | 5.4 | Autoplay mobile : seulement en muet et `playsinline`. | ✅ Lecture muette par défaut, son au toucher. Seul le clip actif et ses voisins chargent la vidéo. |
+| 5.6 | **Autoplay refusé ≠ serveur en panne** (constaté sur iPhone en mode économie d'énergie) : Safari refuse alors toute lecture automatique, même muette. Le lecteur prenait l'absence de données pour un blocage serveur, basculait sur tous les miroirs puis déclarait la vidéo « introuvable ». | ✅ Le délai de bascule ne court que pendant une tentative de lecture en cours ; un refus `NotAllowedError` affiche un bouton « Lire » sans changer de serveur. Test de non-régression qui échoue sur l'ancien lecteur. |
 | 5.5 | Re-snap CSS : une nouveauté insérée au-dessus du clip regardé resterait invisible. | ✅ Si l'on regardait le premier clip, le flux remonte sur la nouveauté ; sinon une pastille « ↑ N nouvelles vidéos » apparaît, sans déplacer ce qu'on regarde. |
 
 ## 6. Ce qui n'a PAS pu être vérifié ici
+
+> **Premier test réel (iPhone, 5G, 1ᵉʳ nov. 2026)** : 6/6 relais connectés, publication et signature
+> vérifiées sur les 6 relais. `blossom.nostr.build` et `blossom.primal.net` ont refusé l'envoi ;
+> `nostr.download` est devenu primaire. Le détail des refus est désormais affiché (Réglages →
+> « Diagnostic du dernier envoi ») pour ajuster la liste par défaut.
 
 - **Relais et serveurs Blossom réels** : la politique réseau du conteneur de développement bloque `relay.damus.io`, `nos.lol`, `blossom.nostr.build`, etc. Tout le pipeline a été validé contre un relais et trois serveurs Blossom **simulés** conformes aux spécifications (`e2e/`). **Avant production**, vérifier pour chaque serveur par défaut : accepte-t-il des clés inconnues sans paiement ? limite de taille ? CORS sur `HEAD /upload` ? `/mirror` ? `/report` ? Domaines cités dans le PRD dont l'URL exacte reste à confirmer : `blosstr.com` (présenté comme payant par sa propre page), `azzamo.media` (non retenu par défaut).
 - **Vrais téléphones** : tests réalisés dans Chromium (caméra simulée) uniquement. Safari iOS (captureStream + MediaRecorder MP4) et Chrome Android doivent être testés sur appareil.

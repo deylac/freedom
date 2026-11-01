@@ -7,7 +7,8 @@ import { forgetIdentity, getOrCreateIdentity, hasExtension, identityPubkey, newI
 import { deleteMyClip } from '../lib/publish'
 import { persistentStorageAvailable, wipeLocalKeys } from '../lib/storage/local'
 import { wipeOutbox } from '../lib/storage/outbox'
-import { clearLocalModeration, getMyClips } from '../lib/storage/personal'
+import { clearLocalModeration, getLastDiagnostics, getMyClips } from '../lib/storage/personal'
+import { DiagnosticList } from './PublishTray'
 import { updateSettings } from '../lib/storage/settings'
 import { IconTrash } from './icons'
 import { Button, copyText, Sheet, Toggle, useToast } from './ui'
@@ -34,6 +35,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [moderatorsText, setModeratorsText] = useState(settings.moderators.map(npubOf).join('\n'))
   const [deleting, setDeleting] = useState<string | null>(null)
   const myClips = getMyClips()
+  const lastDiagnostics = getLastDiagnostics()
   const nsec = useMemo(() => (showNsec ? nsecOf(getOrCreateIdentity()) : ''), [showNsec, pubkey])
 
   const saveNetwork = () => {
@@ -204,6 +206,19 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               Valeurs par défaut
             </Button>
           </div>
+        </Section>
+
+        <Section title="Diagnostic du dernier envoi">
+          {lastDiagnostics ? (
+            <>
+              <p className="mb-2 text-xs text-muted">
+                #{lastDiagnostics.tag} · {relativeTime(Math.floor(lastDiagnostics.at / 1000))}
+              </p>
+              <DiagnosticList items={lastDiagnostics.items} />
+            </>
+          ) : (
+            <p className="text-sm text-muted">Aucun envoi terminé sur cet appareil.</p>
+          )}
         </Section>
 
         <Section title="Modération">

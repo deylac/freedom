@@ -64,8 +64,14 @@ export function ResilientVideo({
   const [index, setIndex] = useState(0)
   const [failed, setFailed] = useState(false)
   const [started, setStarted] = useState(false)
+  /** Lecture automatique refusée par le navigateur (iOS en mode économie d'énergie, politique d'autoplay). */
+  const [needsTap, setNeedsTap] = useState(false)
   const resumeAt = useRef(0)
   const stallTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Une tentative de lecture est en cours : seul cas où l'absence de données signale un blocage serveur. */
+  const playPending = useRef(false)
+  /** Identifiant de tentative : la promesse d'une tentative abandonnée ne doit pas modifier la suivante. */
+  const attemptId = useRef(0)
 
   // Nouvelle liste de candidats (ex. v2 avec fallback reçue) : on garde la source courante si possible.
   const src = load && !failed ? (candidates[index] ?? null) : null
@@ -99,24 +105,61 @@ export function ResilientVideo({
 
   const armStall = useCallback(() => {
     clearStall()
-    stallTimer.current = setTimeout(next, STALL_MS)
+    stallTimer.current = setTimeout(() => {
+      // Ne jamais accuser le serveur d'une pause voulue ou d'un autoplay refusé.
+      const v = videoRef.current
+      if (v && v.paused && !playPending.current) return
+      next()
+    }, STALL_MS)
   }, [next])
+
+  /**
+   * Lance la lecture. Un refus `NotAllowedError` n'est PAS une panne de serveur : c'est le navigateur
+   * qui interdit l'autoplay (iOS en mode économie d'énergie, réglages Safari, onglet en arrière-plan).
+   * On affiche alors un bouton « Lire » au lieu de basculer sur un miroir.
+   */
+  const attemptPlay = useCallback(() => {
+    const v = videoRef.current
+    if (!v) return
+    const id = ++attemptId.current
+    playPending.current = true
+    armStall()
+    const promise = v.play()
+    if (!promise) return
+    promise.then(
+      () => {
+        if (id !== attemptId.current) return
+        playPending.current = false
+        clearStall()
+        setNeedsTap(false)
+      },
+      (err: unknown) => {
+        if (id !== attemptId.current) return
+        playPending.current = false
+        const name = err instanceof DOMException ? err.name : ''
+        if (name === 'NotAllowedError') {
+          clearStall()
+          setNeedsTap(true)
+        }
+        // AbortError : lecture interrompue par un changement de source ou une pause, sans gravité.
+        // NotSupportedError : l'événement `error` de l'élément déclenche déjà la bascule.
+      },
+    )
+  }, [armStall])
 
   // Chargement / lecture
   useEffect(() => {
     const v = videoRef.current
     if (!v || !src) return
-    if (active) {
-      armStall()
-      v.play().catch(() => {
-        /* lecture refusée (autoplay) : l'utilisateur peut toucher pour lancer */
-      })
-    } else {
+    if (active) attemptPlay()
+    else {
+      attemptId.current++
+      playPending.current = false
       clearStall()
       v.pause()
     }
     return clearStall
-  }, [active, src, armStall])
+  }, [active, src, attemptPlay])
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.muted = muted
@@ -171,17 +214,39 @@ export function ResilientVideo({
           aria-label={clip.alt || clip.title || 'Vidéo'}
           className={`absolute inset-0 h-full w-full ${objectFit} ${started ? 'opacity-100' : 'opacity-0'}`}
           onError={next}
-          onLoadStart={() => active && armStall()}
+          onLoadStart={() => active && playPending.current && armStall()}
           onLoadedMetadata={onLoadedMetadata}
           onLoadedData={clearStall}
           onPlaying={() => {
             clearStall()
             setStarted(true)
+            setNeedsTap(false)
           }}
-          onWaiting={() => active && armStall()}
+          onWaiting={() => {
+            if (active && !videoRef.current?.paused) armStall()
+          }}
           onTimeUpdate={onTimeUpdate}
           data-source-host={hostOf(src)}
         />
+      )}
+      {needsTap && src && !failed && (
+        <button
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/30 text-white"
+          onClick={(e) => {
+            e.stopPropagation()
+            setNeedsTap(false)
+            attemptPlay()
+          }}
+          aria-label="Lire la vidéo"
+          data-testid="tap-to-play"
+        >
+          <span className="flex h-20 w-20 items-center justify-center rounded-full bg-black/55 backdrop-blur">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor" aria-hidden>
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </span>
+          <span className="rounded-full bg-black/55 px-3 py-1 text-xs">Lecture automatique bloquée par le navigateur — touchez pour lire</span>
+        </button>
       )}
       {failed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center text-sm text-muted">

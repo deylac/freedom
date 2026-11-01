@@ -4,6 +4,7 @@
  */
 import { emptyMuteList, type MuteList } from '../moderation/policy'
 import { readJSON, writeJSON } from './local'
+import type { Diagnostic } from './outbox'
 
 export interface MyClip {
   key: string
@@ -109,3 +110,18 @@ export function clearLocalModeration(): void {
 export const serverListPublished = (pubkey: string): string[] | null => readJSON<string[] | null>(`servers:${pubkey}`, null)
 
 export const markServerListPublished = (pubkey: string, servers: string[]): void => writeJSON(`servers:${pubkey}`, servers)
+
+// ----- diagnostic du dernier envoi ------------------------------------------------------
+
+export interface LastDiagnostics {
+  at: number
+  tag: string
+  items: Diagnostic[]
+}
+
+export const getLastDiagnostics = (): LastDiagnostics | null => readJSON<LastDiagnostics | null>('last-diagnostics', null)
+
+export function saveLastDiagnostics(d: LastDiagnostics): void {
+  writeJSON('last-diagnostics', d)
+  emit()
+}
