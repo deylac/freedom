@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
-import { minePow } from 'nostr-tools/nip13'
+import { getPow, minePow } from 'nostr-tools/nip13'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import { describe, expect, it } from 'vitest'
 import { emptyMuteList } from './moderation/policy'
@@ -103,7 +103,11 @@ describe('WallStore', () => {
     const report = (clip: ReturnType<typeof parseVideoEvent>, sk: Uint8Array, bits: number) => {
       const t = buildReportEvent(clip!, 'spam', '', [])
       const mined = bits ? minePow({ ...t, pubkey: getPublicKey(sk) }, bits) : t
-      return finalizeEvent({ kind: mined.kind, created_at: mined.created_at, content: mined.content, tags: mined.tags }, sk)
+      let ev = finalizeEvent({ kind: mined.kind, created_at: mined.created_at, content: mined.content, tags: mined.tags }, sk)
+      // Sans preuve voulue : un identifiant aléatoire a 1 chance sur 256 d'avoir 8 bits nuls en tête
+      // (test instable constaté en CI) ; on en tire un autre.
+      for (let i = 1; !bits && getPow(ev.id) >= 8; i++) ev = finalizeEvent({ ...t, created_at: t.created_at - i }, sk)
+      return ev
     }
     const setup = (extra = {}) => {
       const s = new WallStore('mur', { ...emptyContext(), threshold: 3, powBits: 8, ...extra })
