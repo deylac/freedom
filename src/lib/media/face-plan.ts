@@ -32,7 +32,20 @@ export interface MaskPlanOptions {
 /** Une détection masque aussi les images situées à moins de ce délai (s), quelle que soit sa piste. */
 const NEIGHBOR_S = 0.15
 
-const DEFAULTS: Required<MaskPlanOptions> = { pad: 0.2, maxGapS: 1.2, holdS: 0.5, growthPerS: 1.2 }
+// Réglages resserrés après le test réel du 2 nov. (zones « beaucoup trop grandes ») : le masque suit
+// le visage lui-même ; l'interpolation avant/après suffit à suivre le mouvement.
+const DEFAULTS: Required<MaskPlanOptions> = { pad: 0.1, maxGapS: 1.2, holdS: 0.3, growthPerS: 0.6 }
+
+/** Score minimal pour qu'une piste d'UNE seule détection soit masquée (sinon : fausse alerte probable). */
+const LONE_MIN_SCORE = 0.7
+
+/**
+ * Le rectangle du détecteur va des sourcils au menton : on ajoute le front et les cheveux
+ * (+30 % en haut), un peu de marge sur les côtés et sous le menton.
+ */
+function faceShape(b: Box, pad: number): Box {
+  return { ...b, x: b.x - b.w * pad, y: b.y - b.h * (pad + 0.2), w: b.w * (1 + 2 * pad), h: b.h * (1 + 2 * pad + 0.2) }
+}
 
 interface Obs {
   t: number
@@ -60,9 +73,19 @@ export class MaskPlan {
     for (const f of [...frames].sort((a, b) => a.t - b.t)) this.addFrame(f)
   }
 
-  /** Nombre de visages distincts suivis (pistes). */
+  /** Nombre de visages distincts suivis (pistes crédibles). */
   get trackCount(): number {
-    return this.tracks.length
+    return this.tracks.filter((t) => !this.isLoneWeak(t)).length
+  }
+
+  /** Piste d'une seule détection peu sûre : fausse alerte probable (encadrement de porte, motif). */
+  private isLoneWeak(track: Obs[]): boolean {
+    return track.length < 2 && (track[0].box.score ?? 1) < LONE_MIN_SCORE
+  }
+
+  private isSpurious(b: Box): boolean {
+    const track = this.tracks.find((tr) => tr.some((o) => o.box === b))
+    return !!track && this.isLoneWeak(track)
   }
 
   /** Ajoute des détections (ex. visages trouvés par la vérification), dans l'ordre chronologique ou non. */
@@ -109,6 +132,7 @@ export class MaskPlan {
     const out: Box[] = []
     const { pad, maxGapS, holdS, growthPerS } = this.o
     for (const track of this.tracks) {
+      if (this.isLoneWeak(track)) continue
       let prev: Obs | undefined
       let next: Obs | undefined
       for (const o of track) {
@@ -122,7 +146,7 @@ export class MaskPlan {
       if (prev && next && next.t - prev.t <= maxGapS) {
         const gap = next.t - prev.t
         // Interpolation ; marge supplémentaire si l'écart est long (trajectoire moins sûre).
-        box = grow(lerp(prev.box, next.box, (t - prev.t) / gap), Math.min(0.4, gap * 0.5))
+        box = grow(lerp(prev.box, next.box, (t - prev.t) / gap), Math.min(0.15, gap * 0.3))
       } else {
         const near = !prev ? next : !next ? prev : t - prev.t <= next.t - t ? prev : next
         if (!near) continue
@@ -130,12 +154,12 @@ export class MaskPlan {
         if (dt > holdS) continue
         box = grow(near.box, dt * growthPerS)
       }
-      out.push(grow(box, pad))
+      out.push(faceShape(box, pad))
     }
     // Filet de sécurité, indépendant des pistes : chaque détection masque aussi les images voisines.
     for (const f of this.frames) {
       const dt = Math.abs(f.t - t)
-      if (dt <= NEIGHBOR_S) for (const b of f.boxes) out.push(grow(b, pad + dt * growthPerS))
+      if (dt <= NEIGHBOR_S) for (const b of f.boxes) if (!this.isSpurious(b)) out.push(faceShape(grow(b, dt * growthPerS), pad))
     }
     return out
   }

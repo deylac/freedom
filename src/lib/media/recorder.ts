@@ -289,12 +289,13 @@ export class CaptureSession {
     if (!this.tracker!.trusted) this.pixelate(0, 0, W, H, 28, o)
     else
       for (const face of this.tracker!.faces) {
-        const p = padBox(face, marginFor(face), W, H)
-        this.pixelate(p.x, p.y, p.w, p.h, blockFor(face), o)
+        // Aperçu : flou lisse, comme le rendu final (le fichier final vient du second passage).
+        const p = padBox(face, 0.2, W, H)
+        this.pixelate(p.x, p.y, p.w, p.h, Math.max(4, Math.max(face.w, face.h) / 7), o, true)
       }
   }
 
-  private pixelate(x: number, y: number, w: number, h: number, block: number, target: CanvasRenderingContext2D = this.ctx) {
+  private pixelate(x: number, y: number, w: number, h: number, block: number, target: CanvasRenderingContext2D = this.ctx, smooth = false) {
     if (w < 2 || h < 2) return
     const tw = Math.max(1, Math.ceil(w / block))
     const th = Math.max(1, Math.ceil(h / block))
@@ -303,7 +304,7 @@ export class CaptureSession {
     const sctx = this.scratch.getContext('2d')
     if (!sctx) return
     sctx.drawImage(this.canvas, x, y, w, h, 0, 0, tw, th)
-    target.imageSmoothingEnabled = false
+    target.imageSmoothingEnabled = smooth
     target.drawImage(this.scratch, 0, 0, tw, th, x, y, w, h)
     target.imageSmoothingEnabled = true
   }

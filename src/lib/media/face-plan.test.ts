@@ -48,11 +48,13 @@ describe('plan de masquage du second passage', () => {
     }
   })
 
-  it('masque serré : sans mouvement, il ne dépasse le visage que de la marge (≈ 20 %)', () => {
+  it('masque serré : sans mouvement, il ne dépasse le visage que d’une marge d’environ 10 à 15 % par côté', () => {
     const plan = new MaskPlan([0, 0.1, 0.2].map((t) => ({ t, boxes: [face(200)] })))
     const [m] = plan.at(0.1)
-    expect(m.w).toBeLessThan(60 * 1.6)
-    expect(m.w).toBeGreaterThanOrEqual(60 * 1.4)
+    expect(m.w).toBeLessThan(60 * 1.35)
+    expect(m.w).toBeGreaterThanOrEqual(60 * 1.15)
+    // Le front est inclus (le détecteur s'arrête aux sourcils).
+    expect(m.y).toBeLessThan(100 - 60 * 0.25)
   })
 
   it('covered : centre d’une détection dans un masque', () => {
@@ -76,8 +78,9 @@ describe('plan de masquage : cas réels relevés en E2E', () => {
     expect(fullyMasked(plan, 0.25, fixed)).toBe(true)
   })
 
-  it('filet de sécurité : une détection isolée masque les images voisines', () => {
-    const f = face(300)
+  it('une détection isolée peu sûre (porte, motif) n’est pas masquée ; sûre, elle l’est avec ses voisines', () => {
+    expect(new MaskPlan([{ t: 1, boxes: [{ ...face(300), score: 0.55 }] }]).at(1)).toEqual([])
+    const f = { ...face(300), score: 0.9 }
     const plan = new MaskPlan([{ t: 1, boxes: [f] }])
     for (const t of [0.9, 1, 1.1]) expect(fullyMasked(plan, t, f)).toBe(true)
   })
