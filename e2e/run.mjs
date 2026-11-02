@@ -598,25 +598,24 @@ await step('Tout effacer avec un second onglet ouvert : la file d’envoi est r�
 })
 
 // ---------------------------------------------------------------------------
-// Constat réel (iPhone, 1ᵉʳ nov.) : vidéo publiée avec un visage net, le filtre étant désactivé par défaut.
+// Constat réel (iPhone, 1ᵉʳ nov.) : l'état du filtre n'était pas visible (icône seule sur mobile).
+// Défaut « Sans flou » depuis le 2 nov., le temps de remplacer le détecteur ; le choix est mémorisé.
 
-await step('Par défaut, la caméra s’ouvre avec les visages floutés (libellé visible sur mobile)', async () => {
+await step('Filtre d’anonymisation : libellé visible sur mobile, « Sans flou » par défaut, choix mémorisé', async () => {
   const { captureFilter: _ignored, ...defaults } = settings
   const page = await newPage({ mobile: true, init: { ...defaults, termsAcceptedVersion: 1 } })
   await page.goto(`${APP}#defaut`)
   await page.getByRole('button', { name: /Filmer pour #defaut/ }).click()
   const toggle = page.getByRole('button', { name: /Filtre d'anonymisation/ })
   await toggle.waitFor({ timeout: 10_000 })
+  assert.match(await toggle.getAttribute('aria-label'), /Sans filtre/)
+  assert.match(await toggle.innerText(), /Sans flou/, 'libellé invisible sur mobile')
+  await toggle.click()
   assert.match(await toggle.getAttribute('aria-label'), /Visages floutés/)
-  assert.match(await toggle.innerText(), /Visages/, 'libellé invisible sur mobile')
   await page.getByTestId('face-status').waitFor({ timeout: 5_000 })
-  // Le choix est mémorisé : « Sans filtre » reste choisi à la prochaine ouverture.
-  await toggle.click()
-  await toggle.click()
-  assert.match(await toggle.getAttribute('aria-label'), /Sans filtre|Aucun/)
   await page.getByRole('button', { name: 'Fermer la caméra' }).click()
   await page.getByRole('button', { name: /Filmer pour #defaut/ }).click()
-  assert.match(await page.getByRole('button', { name: /Filtre d'anonymisation/ }).getAttribute('aria-label'), /Sans filtre|Aucun/)
+  assert.match(await page.getByRole('button', { name: /Filtre d'anonymisation/ }).getAttribute('aria-label'), /Visages floutés/)
   await page.context().close()
 })
 
