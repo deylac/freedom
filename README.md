@@ -82,7 +82,7 @@ murs mis en avant). L'utilisateur peut ensuite tout modifier dans les Réglages.
 | FR-05 | kind 34236, `d` stable, imeta complet | ✅ `d` dérivé du hash, `published_at`, `alt`, `size` |
 | FR-06 | Grille/flux, bascule sans coupure | ✅ sur erreur **et** sur blocage silencieux |
 | FR-07 | Signalement NIP-56 + BUD-09, mute list, avertissements | ✅ |
-| FR-08 | Floutage visages / voix, Proofmode | ⚠️ visages ou pixelisation : oui ; voix : non ; Proofmode : impossible en web |
+| FR-08 | Floutage visages / voix, Proofmode | ⚠️ image entière pixelisée : oui ; visages : après coup, à la demande (expérimental) ; voix robot : oui ; Proofmode : impossible en web |
 
 ## Critères d'acceptation (§8)
 

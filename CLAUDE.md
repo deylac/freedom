@@ -85,11 +85,12 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 15. **Stockage local** : une écriture IndexedDB n'est acquise qu'à `oncomplete` (`putJob` renvoie
     `durable`/`memory`) ; « Tout effacer » ne se termine que sur suppression **effective**. Ne jamais
     retirer une vidéo de « Mes vidéos » (ni sa clé) tant que sa suppression distante n'est pas confirmée.
-16. **Visages** : masques et confiance du détecteur expirent ensemble, datés à la capture (`face-history.ts`).
-    Second passage (`face-pass.ts`, `face-plan.ts`) : la vidéo brute ne quitte jamais la mémoire (ni file
-    d'envoi, ni réseau) ; échec = vidéo abandonnée ; le mode (direct ou second passage) est figé au
-    début de l'enregistrement. L'E2E « Visages » mesure le **fichier final** (ressemblance < 0,65 ; net ≈ 0,85–0,92).
-    Rendu : visage réduit à ~6–7 points puis lissé, ellipse serrée (choix de l'éditeur : point de friction).
+16. **Visages** : le floutage n'est **jamais automatique** (décision du 2 nov. : pas assez fiable ni
+    rapide en conditions réelles). Il se lance **après coup**, à la demande, depuis l'aperçu
+    (« Flouter les visages », expérimental) ; l'original est conservé jusqu'à la publication pour
+    « Revenir à l'original ». La caméra ne propose que « Sans flou » / « Tout flou ». Second passage
+    (`face-pass.ts`, `face-plan.ts`) : rien n'est écrit ni envoyé avant la décision de l'utilisateur.
+    L'E2E mesure le **fichier final** (ressemblance < 0,65 ; net ≈ 0,85–0,92).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la

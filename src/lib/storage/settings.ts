@@ -35,12 +35,11 @@ export interface Settings {
   /** Explorateurs Bitcoin (API Esplora) utilisés pour vérifier les preuves. */
   btcExplorers: string[]
   /**
-   * Filtre d'anonymisation à l'ouverture de la caméra (dernier choix mémorisé). « Sans flou » par
-   * défaut depuis le 2 nov. : le floutage des visages (détecteur BlazeFace) donnait un rendu jugé
-   * insatisfaisant en réel (zones trop grandes, fausses alertes) ; il revient par défaut avec le
-   * nouveau détecteur. Le libellé du bouton reste toujours visible.
+   * Filtre à l'ouverture de la caméra (dernier choix mémorisé). Le floutage des visages n'est plus un
+   * mode de tournage (décision du 2 nov.) : il se lance après coup, à la demande, depuis l'aperçu.
+   * Une ancienne valeur « faces » enregistrée est lue comme « none ».
    */
-  captureFilter: 'none' | 'faces' | 'pixelate'
+  captureFilter: 'none' | 'pixelate'
 }
 
 export const DEFAULT_SETTINGS: Settings = {

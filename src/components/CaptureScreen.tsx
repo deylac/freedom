@@ -5,7 +5,7 @@ import { useSettings, useWakeLock } from '../hooks/basics'
 import { formatBytes, formatDuration } from '../lib/format'
 import { detectCaptureSupport } from '../lib/media/mime'
 import type { PassStage } from '../lib/media/face-pass'
-import { CaptureError, CaptureSession, type FaceStatus, type FilterMode, type Recording } from '../lib/media/recorder'
+import { blurFacesAfter, canBlurFacesAfter, CaptureError, CaptureSession, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
 import { isDurable } from '../lib/storage/outbox'
@@ -58,13 +58,11 @@ const PASS_LABEL: Record<PassStage, string> = {
 
 const FILTER_SHORT: Record<FilterMode, string> = {
   none: 'Sans flou',
-  faces: 'Visages',
   pixelate: 'Tout flou',
 }
 
 const FILTER_LABEL: Record<FilterMode, string> = {
   none: 'Sans filtre',
-  faces: 'Visages floutés',
   pixelate: 'Image pixelisée',
 }
 
@@ -73,17 +71,15 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   const toast = useToast()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const overlayRef = useRef<HTMLCanvasElement>(null)
-  const [pass, setPass] = useState<{ stage: PassStage; fraction: number } | null>(null)
   const session = useRef<CaptureSession | null>(null)
   const [phase, setPhase] = useState<Phase>('starting')
   const [error, setError] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [recording, setRecording] = useState<Recording | null>(null)
-  const [filter, setFilter] = useState<FilterMode>(settings.captureFilter)
+  // « Visages » n'est plus un mode de tournage (2 nov.) : un ancien réglage mémorisé vaut « Sans flou ».
+  const [filter, setFilter] = useState<FilterMode>(settings.captureFilter === 'pixelate' ? 'pixelate' : 'none')
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [voice, setVoice] = useState<'natural' | 'robot'>('natural')
-  const [faceStatus, setFaceStatus] = useState<FaceStatus>({ state: 'off', trusted: false, count: 0 })
   const total = useMemo(maxDuration, [])
 
   useWakeLock(phase !== 'error')
@@ -96,8 +92,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
       setPhase('error')
       return
     }
-    const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality, overlayRef.current)
-    s.onProcessing = (stage, fraction) => setPass({ stage, fraction })
+    const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality)
     s.maxMs = total
     s.filter = filter
     session.current = s
@@ -125,7 +120,6 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     const s = session.current
     if (!s || phase !== 'ready') return
     setElapsed(0)
-    setPass(null)
     let done: Promise<Recording>
     try {
       done = s.start()
@@ -152,16 +146,6 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     session.current?.stop()
   }
 
-  // État du détecteur de visages, y compris avant l'enregistrement (chargement du modèle).
-  useEffect(() => {
-    if (filter !== 'faces') return
-    const id = setInterval(() => {
-      const s = session.current
-      if (s) setFaceStatus(s.faceStatus())
-    }, 250)
-    return () => clearInterval(id)
-  }, [filter])
-
   const toggleVoice = () => {
     const next = voice === 'robot' ? 'natural' : 'robot'
     setVoice(next)
@@ -170,7 +154,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   }
 
   const cycleFilter = () => {
-    const order: FilterMode[] = ['none', 'faces', 'pixelate']
+    const order: FilterMode[] = ['none', 'pixelate']
     const next = order[(order.indexOf(filter) + 1) % order.length]
     setFilter(next)
     updateSettings({ captureFilter: next })
@@ -204,15 +188,6 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
         style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' || phase === 'processing' ? 'hidden' : 'visible' }}
         aria-label="Aperçu de la caméra"
       />
-      {/* Calque de l'aperçu flouté : l'image enregistrée reste brute (en mémoire) jusqu'au second passage. */}
-      <canvas
-        ref={overlayRef}
-        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' || phase === 'processing' ? 'hidden' : 'visible' }}
-        aria-hidden
-        data-testid="blur-overlay"
-      />
-
       {phase === 'review' && recording && (
         <Review
           tag={tag}
@@ -220,6 +195,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
           autoPublish={settings.autoPublish}
           onRetake={retake}
           onCancel={onClose}
+          onChange={setRecording}
           onPublish={async (caption, contentWarning) => {
             try {
               const job = await createJob(recording, { tag, caption, contentWarning, useExtension: settings.useExtension })
@@ -269,24 +245,9 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
             </div>
           </div>
 
-          {filter !== 'none' && phase !== 'processing' && (
-            <p
-              className="absolute inset-x-4 top-24 rounded-xl bg-black/50 px-3 py-2 text-center text-xs text-white/90 backdrop-blur"
-              role="status"
-              data-testid="face-status"
-              data-state={filter === 'faces' ? faceStatus.state : 'pixelate'}
-              data-trusted={faceStatus.trusted}
-              data-count={faceStatus.count}
-            >
-              {filter === 'pixelate'
-                ? 'Toute l’image est pixelisée dans le fichier final.'
-                : faceStatus.state === 'error'
-                  ? `Détecteur de visages indisponible (${faceStatus.error ?? 'erreur'}) : image entière pixelisée par sécurité.`
-                  : faceStatus.state !== 'ready'
-                    ? 'Chargement du détecteur de visages (≈ 15 Mo, une seule fois)… En attendant, toute l’image est pixelisée.'
-                    : !faceStatus.trusted
-                      ? 'Analyse de toute l’image… En attendant, elle est entièrement pixelisée.'
-                      : `${faceStatus.count} visage${faceStatus.count > 1 ? 's' : ''} flouté${faceStatus.count > 1 ? 's' : ''} dans le fichier final. Visages très lointains ou de profil : préférez « Image pixelisée ».`}
+          {filter === 'pixelate' && (
+            <p className="absolute inset-x-4 top-24 rounded-xl bg-black/50 px-3 py-2 text-center text-xs text-white/90 backdrop-blur" role="status" data-testid="filter-status">
+              Toute l’image est pixelisée dans le fichier final.
             </p>
           )}
 
@@ -330,9 +291,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
               {phase === 'recording'
                 ? 'Enregistrement…'
                 : phase === 'processing'
-                  ? pass
-                    ? `${PASS_LABEL[pass.stage]} ${Math.round(pass.fraction * 100)} %`
-                    : 'Finalisation…'
+                  ? 'Finalisation…'
                   : '60 secondes max · métadonnées GPS supprimées'}
             </span>
           </div>
@@ -348,6 +307,7 @@ function Review({
   autoPublish,
   onRetake,
   onCancel,
+  onChange,
   onPublish,
 }: {
   tag: string
@@ -355,6 +315,7 @@ function Review({
   autoPublish: boolean
   onRetake: () => void
   onCancel: () => void
+  onChange: (rec: Recording) => void
   onPublish: (caption: string, contentWarning?: string) => Promise<void>
 }) {
   const url = useMemo(() => URL.createObjectURL(recording.blob), [recording.blob])
@@ -386,6 +347,35 @@ function Review({
 
   const pause = () => setCountdown(null)
 
+  // Floutage des visages APRÈS COUP, seulement si l'utilisateur le demande (expérimental, lent).
+  const [original, setOriginal] = useState<Recording | null>(null)
+  const [blur, setBlur] = useState<{ stage: PassStage; fraction: number } | 'idle' | 'error'>('idle')
+  const [blurError, setBlurError] = useState<string | null>(null)
+  const [blurAvailable, setBlurAvailable] = useState<boolean | null>(null)
+  useEffect(() => {
+    void canBlurFacesAfter().then(setBlurAvailable, () => setBlurAvailable(false))
+  }, [])
+  const blurring = typeof blur === 'object'
+  const startBlur = async () => {
+    pause()
+    setBlurError(null)
+    setBlur({ stage: 'analyse', fraction: 0 })
+    try {
+      const done = await blurFacesAfter(recording, (stage, fraction) => setBlur({ stage, fraction }))
+      setOriginal(recording)
+      onChange(done)
+      setBlur('idle')
+    } catch (err) {
+      setBlurError(err instanceof Error ? err.message : String(err))
+      setBlur('error')
+    }
+  }
+  const undoBlur = () => {
+    if (!original) return
+    onChange(original)
+    setOriginal(null)
+  }
+
   return (
     <div className="absolute inset-0 flex flex-col bg-black" data-testid="review">
       <video src={url} className="min-h-0 flex-1 object-contain" autoPlay muted loop playsInline controls={false} aria-label="Aperçu de votre vidéo" />
@@ -411,6 +401,30 @@ function Review({
             Vérifiez l’aperçu avant de publier.
           </p>
         )}
+        <div className="rounded-xl border border-line p-2.5 text-xs" data-testid="face-blur">
+          {blurring ? (
+            <p className="text-white" role="status">
+              Floutage des visages (expérimental) : {PASS_LABEL[blur.stage]} {Math.round(blur.fraction * 100)} %
+            </p>
+          ) : original ? (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted">Visages floutés (expérimental) : vérifiez l’aperçu.</span>
+              <button className="shrink-0 font-semibold text-accent" onClick={undoBlur}>
+                Revenir à l’original
+              </button>
+            </div>
+          ) : blurAvailable === false ? (
+            <p className="text-muted">Floutage des visages indisponible sur ce navigateur.</p>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted">Expérimental : peut prendre du temps et oublier des visages.</span>
+              <button className="shrink-0 font-semibold text-accent disabled:opacity-40" onClick={() => void startBlur()} disabled={!blurAvailable || busy}>
+                Flouter les visages
+              </button>
+            </div>
+          )}
+          {blurError && <p className="mt-1 text-rec">Floutage impossible ({blurError}) : la vidéo d’origine est conservée.</p>}
+        </div>
         {tooBig && <p className="text-xs text-rec">Fichier de {formatBytes(recording.size)} : certains serveurs gratuits (limite 20 Mio) le refuseront. Le mode « réseau saturé » des réglages réduit la taille.</p>}
         <input
           value={caption}
@@ -433,10 +447,10 @@ function Review({
           <Button variant="ghost" onClick={onCancel} aria-label="Annuler et supprimer la vidéo" className="px-3">
             <IconClose size={18} />
           </Button>
-          <Button variant="ghost" onClick={onRetake} className="flex-1">
+          <Button variant="ghost" onClick={onRetake} className="flex-1" disabled={blurring}>
             <IconRetry size={18} /> Refaire
           </Button>
-          <Button onClick={publish} disabled={busy} className="flex-[2]" data-testid="publish">
+          <Button onClick={publish} disabled={busy || blurring} className="flex-[2]" data-testid="publish">
             <IconCheck size={18} />
             {busy ? 'Préparation…' : countdown !== null ? `Publication dans ${countdown}…` : 'Publier'}
           </Button>

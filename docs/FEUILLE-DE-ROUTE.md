@@ -16,7 +16,7 @@ Effort conseillé : 🟢 moyen suffit (tout est spécifié) · 🟠 élevé cons
 | 6 | « Charger plus » (pagination des murs anciens) | P2 | ✅ livré |
 | 7 | Horodatage OpenTimestamps | P2 | ✅ livré — sur l'empreinte du **fichier**, pas NIP-03 (voir ANGLES-MORTS §8) |
 | 8 | **Résilience maximale** (miroirs, réplication par les spectateurs, hors ligne, P2P) | P0 | ✅ R1–R3 livrés, R4 partiel — détails et suite : `docs/RESILIENCE.md` §3–5 |
-| 10 | **Floutage des visages v3** : détecteur YuNet, visage réduit à 6–7 points et lissé, ellipse serrée | P1 | ✅ livré — à valider sur iPhone avant de le remettre par défaut |
+| 10 | **Floutage des visages** : abandonné en automatique (test réel insuffisant) ; disponible **après coup, à la demande, expérimental** | P3 | ⏸️ mis de côté — voir ANGLES-MORTS 12.9 |
 | 9 | **Audit développeur** (9 défauts : visages, doublons, effacement, suppression, service worker, file d'envoi, reprise, imeta, modérateurs) | P1 | ✅ corrigés avec tests — `docs/ANGLES-MORTS.md` §10 |
 | — | Décisions hors code (licence, juridique, collectif de modération, domaine) | P0 | — |
 
