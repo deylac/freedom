@@ -97,6 +97,8 @@ export class CaptureSession {
   private posterPromise: Promise<Blob | null> | null = null
   private scratch = document.createElement('canvas')
   private closed = false
+  /** Lignes du filigrane (vide : aucun). La première est en gras. */
+  watermark: string[] = []
   done: Promise<Recording> | null = null
 
   constructor(
@@ -215,8 +217,37 @@ export class CaptureSession {
       const sy = (v.videoHeight - sh) / 2
       this.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H)
       if (this.filter === 'pixelate') this.pixelate(0, 0, W, H, 28)
+      this.drawWatermark(W, H)
     }
     if (!this.closed) this.raf = requestAnimationFrame(this.draw)
+  }
+
+  /**
+   * Filigrane incrusté dans l'image (donc dans le fichier, où qu'il soit repartagé) : indique que la
+   * vidéo vient du projet. Dessiné APRÈS la pixelisation pour rester lisible.
+   */
+  private drawWatermark(W: number, H: number) {
+    if (this.watermark.length === 0) return
+    const ctx = this.ctx
+    const [title, ...rest] = this.watermark
+    ctx.save()
+    ctx.textBaseline = 'alphabetic'
+    ctx.font = '700 30px system-ui, -apple-system, Roboto, sans-serif'
+    const small = '500 20px system-ui, -apple-system, Roboto, sans-serif'
+    const x = 28
+    let y = H - 44 - rest.length * 26
+    ctx.shadowColor = 'rgba(0,0,0,0.85)'
+    ctx.shadowBlur = 6
+    ctx.fillStyle = 'rgba(255,255,255,0.92)'
+    ctx.fillText(title, x, y)
+    ctx.font = small
+    ctx.fillStyle = 'rgba(255,255,255,0.8)'
+    for (const line of rest) {
+      y += 26
+      ctx.fillText(line, x, y)
+    }
+    ctx.restore()
+    void W
   }
 
   private pixelate(x: number, y: number, w: number, h: number, block: number) {

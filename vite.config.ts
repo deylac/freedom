@@ -6,7 +6,7 @@ import { join, relative } from 'node:path'
 import { Script } from 'node:vm'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 
 /**
  * Content-Security-Policy injectée en <meta> au build.
@@ -15,6 +15,34 @@ import { defineConfig, type Plugin } from 'vite'
  *   et serveurs Blossom sont choisis par les utilisateurs (pas de liste fermée possible).
  * - Le mode `e2e` autorise en plus les serveurs simulés sur la boucle locale.
  */
+/**
+ * Aperçus de liens sur les réseaux sociaux (Open Graph / Twitter). Les robots des réseaux ne lisent
+ * pas le #fragment : l'aperçu est celui du projet, l'URL partagée garde le mur et la vidéo.
+ */
+function socialMeta(mode: string): Plugin {
+  const site = (loadEnv(mode, process.cwd(), 'VITE_').VITE_SITE_URL || 'https://deylac.github.io/freedom/').replace(/\/?$/, '/')
+  const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  const title = 'HashWall — vidéos citoyennes de 60 secondes'
+  const description = 'Filmez 60 secondes, publiées sans compte sur un mur public décentralisé. Impossible à censurer depuis un seul point.'
+  const tags = [
+    ['og:type', 'website'],
+    ['og:site_name', 'HashWall'],
+    ['og:title', title],
+    ['og:description', description],
+    ['og:image', `${site}icons/icon-512.png`],
+    ['og:url', site],
+  ]
+    .map(([p, c]) => `<meta property="${p}" content="${esc(c)}" />`)
+    .concat([
+      `<meta name="twitter:card" content="summary" />`,
+      `<meta name="twitter:title" content="${esc(title)}" />`,
+      `<meta name="twitter:description" content="${esc(description)}" />`,
+      `<meta name="twitter:image" content="${esc(`${site}icons/icon-512.png`)}" />`,
+    ])
+    .join('\n    ')
+  return { name: 'hashwall-social-meta', transformIndexHtml: (html) => html.replace('<!--SOCIAL-->', tags) }
+}
+
 function cspPlugin(mode: string): Plugin {
   const loopback = mode === 'e2e' ? ' http://127.0.0.1:* ws://127.0.0.1:*' : ''
   const csp = [
@@ -141,7 +169,7 @@ export default defineConfig(({ mode }) => ({
   },
   // Chemins relatifs : indispensable pour IPFS (/ipfs/<cid>/) et les miroirs en sous-dossier.
   base: './',
-  plugins: [react(), tailwindcss(), ortAssets(), cspPlugin(mode), serviceWorkerPlugin()],
+  plugins: [react(), tailwindcss(), ortAssets(), cspPlugin(mode), socialMeta(mode), serviceWorkerPlugin()],
   worker: {
     // Worker classique (iife) : le moteur ONNX Runtime y est embarqué (variante « bundle »).
     format: 'iife' as const,

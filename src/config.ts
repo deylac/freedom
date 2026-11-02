@@ -174,3 +174,9 @@ export const PROJECT_PUBKEY = (() => {
   }
   return ''
 })()
+
+/** Nom incrusté en filigrane dans chaque vidéo filmée (identifie le projet partout où elle circule). */
+export const WATERMARK_NAME = (env.VITE_WATERMARK_NAME ?? '').trim() || 'HashWall'
+
+/** Adresse publique absolue du site (aperçus de liens des réseaux sociaux, Open Graph). */
+export const SITE_URL = (env.VITE_SITE_URL ?? '').trim() || 'https://deylac.github.io/freedom/'

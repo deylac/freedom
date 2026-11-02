@@ -2,6 +2,7 @@
 // Usage : npm run e2e           (limite de capture réduite à 5 s pour aller vite)
 //         E2E_FULL=1 npm run e2e (vraie limite de 60 s)
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
@@ -358,6 +359,43 @@ await step('Horodatage Bitcoin : preuve dans imeta, en attente puis vérifiée, 
 })
 
 // ---------------------------------------------------------------------------
+// Partage vers les réseaux sociaux et filigrane
+
+await step('Filigrane incrusté dans le fichier publié ; partage du fichier vidéo (repli : téléchargement)', async () => {
+  const sha = imeta(firstEvent).x[0]
+  // Filigrane : texte clair sur ombre, en bas à gauche, dans le FICHIER publié (pas un calque d'interface).
+  const probe = await viewer.evaluate(async (url) => {
+    const v = document.createElement('video')
+    v.muted = true
+    v.src = URL.createObjectURL(await (await fetch(url)).blob())
+    await new Promise((r) => (v.onloadeddata = r))
+    v.currentTime = 1
+    await new Promise((r) => (v.onseeked = r))
+    const c = new OffscreenCanvas(720, 1280)
+    const cx = c.getContext('2d')
+    cx.drawImage(v, 0, 0, 720, 1280)
+    const bright = (x, y, w, h) => {
+      const d = cx.getImageData(x, y, w, h).data
+      let n = 0
+      for (let i = 0; i < d.length; i += 4) if (d[i] > 215 && d[i + 1] > 215 && d[i + 2] > 215) n++
+      return n / (w * h)
+    }
+    return { mark: bright(24, 1150, 380, 90), control: bright(316, 40, 380, 90) }
+  }, `${A.base}/${sha}.mp4`)
+  assert.ok(probe.mark > 0.03 && probe.mark > probe.control * 2, `filigrane absent du fichier (zone ${probe.mark.toFixed(3)}, témoin ${probe.control.toFixed(3)})`)
+
+  const card = viewer.locator('[data-clip-key]').first()
+  await card.getByRole('button', { name: "Plus d'actions" }).click()
+  await viewer.getByTestId('share-file').click()
+  await viewer.getByTestId('share-file-go').waitFor({ timeout: 15_000 })
+  const [download] = await Promise.all([viewer.waitForEvent('download'), viewer.getByTestId('share-file-go').click()])
+  assert.match(download.suggestedFilename(), /^hashwall-14octobre-[0-9a-f]{8}\.mp4$/)
+  const bytes = readFileSync(await download.path())
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), sha, 'le fichier partagé doit être la vidéo publiée')
+  return `filigrane : ${(probe.mark * 100).toFixed(1)} % de pixels clairs (témoin ${(probe.control * 100).toFixed(1)} %) ; fichier partagé = vidéo publiée`
+})
+
+// ---------------------------------------------------------------------------
 // Résilience : réplication par les spectateurs (docs/RESILIENCE.md, R1)
 
 await step('Préservation : un spectateur copie la vidéo ; serveurs d’origine bloqués, lecture depuis la copie', async () => {
@@ -396,7 +434,7 @@ await step('Préservation : un spectateur copie la vidéo ; serveurs d’origine
 
 await step('Préservation automatique après 5 s de visionnage', async () => {
   const sha = imeta(firstEvent).x[0]
-  const page = await newPage({ mobile: true, init: { ...settings, blossomServers: [A.base, H.base], autoPreserve: true } })
+  const page = await newPage({ mobile: true, init: { ...settings, blossomServers: [A.base, H.base], autoPreserve: true }, extra: { 'hw:e2e:preserveAlways': '1' } })
   await page.goto(`${APP}#14octobre`)
   await playbackHost(page)
   await waitFor(() => H.blobs.has(sha), 20_000, 'copie automatique sur H')
@@ -651,6 +689,55 @@ await step('Mobile : aucun champ de saisie sous 16 px (pas de zoom automatique d
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   assert.ok(overflow <= 0, `page plus large que l'écran de ${overflow} px`)
   await page.context().close()
+})
+
+// ---------------------------------------------------------------------------
+// Montée en charge : mur viral (centaines de vidéos)
+
+await step('Mur de 300 vidéos : rendu borné (fil fenêtré, grille par lots)', async () => {
+  const { finalizeEvent, generateSecretKey } = require('nostr-tools/pure')
+  const now = Math.floor(Date.now() / 1000)
+  for (let i = 0; i < 300; i++) {
+    const sha = createHash('sha256').update(`charge-${i}`).digest('hex')
+    const sk = generateSecretKey()
+    relay.seed(
+      finalizeEvent(
+        {
+          kind: 34236,
+          created_at: now - i,
+          content: '',
+          tags: [
+            ['d', `hw-${sha.slice(0, 16)}`],
+            ['title', `clip ${i}`],
+            ['t', 'charge'],
+            ['imeta', `url ${A.base}/${sha}.mp4`, `x ${sha}`, 'm video/mp4', 'dim 720x1280', `image ${A.base}/${sha}.jpg`],
+            ['duration', '5'],
+          ],
+        },
+        sk,
+      ),
+    )
+  }
+  const page = await newPage({ mobile: true })
+  await page.goto(`${APP}#charge`)
+  await page.locator('[data-clip-key]').nth(150).waitFor({ state: 'attached', timeout: 15_000 })
+  const counts = await page.evaluate(() => ({
+    sections: document.querySelectorAll('[data-testid=feed] section[data-clip-key]').length,
+    media: document.querySelectorAll('[data-testid=feed] img, [data-testid=feed] video').length,
+  }))
+  assert.ok(counts.sections >= 150, `fil incomplet (${counts.sections})`)
+  assert.ok(counts.media <= 10, `${counts.media} images/vidéos rendues dans le fil (fenêtre attendue ≤ 10)`)
+  await page.context().close()
+
+  const desk = await newPage()
+  await desk.goto(`${APP}#charge`)
+  await desk.getByTestId('grid-more').waitFor({ timeout: 15_000 })
+  const cards = await desk.locator('[data-testid=grid] [data-clip-key]').count()
+  assert.ok(cards <= 60, `${cards} cartes affichées d'un coup (lots de 60 attendus)`)
+  await desk.getByTestId('grid-more').click()
+  assert.ok((await desk.locator('[data-testid=grid] [data-clip-key]').count()) > cards)
+  await desk.context().close()
+  return `${counts.sections} vidéos dans le fil, ${counts.media} médias rendus ; grille : ${cards} cartes puis lot suivant`
 })
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,8 @@ import { fromBase64, hexToBytes, parseOts, serializeOts } from '../lib/ots/ots'
 import { clipShareUrl, useExtraServers } from './Clip'
 import { useCandidates, type SourceState } from './ResilientVideo'
 import type { WallStore } from '../lib/wall-store'
-import { IconCheck, IconDownload, IconEyeOff, IconFlag, IconLink, IconShield } from './icons'
-import { Button, copyText, Sheet, useToast } from './ui'
+import { IconCheck, IconDownload, IconEyeOff, IconFlag, IconLink, IconShare, IconShield } from './icons'
+import { Button, copyText, shareVideoFile, Sheet, useToast } from './ui'
 
 const REPORT_CHOICES: { reason: ReportReason; label: string }[] = [
   { reason: 'illegal', label: 'Contenu illégal (pédocriminalité, terrorisme…)' },
@@ -103,6 +103,30 @@ export function ClipMenu({
     }
   }
 
+  // Partage du FICHIER vers un réseau social : téléchargement vérifié d'abord, puis partage sur un
+  // second geste (Safari exige que le partage suive immédiatement un toucher).
+  const [shareFile, setShareFile] = useState<File | null>(null)
+  const [preparing, setPreparing] = useState(false)
+  const prepareShare = async () => {
+    if (!clip.video.sha256) return
+    setPreparing(true)
+    try {
+      const { blob } = await downloadVerified(candidates, clip.video.sha256, sha256Hex)
+      const mime = clip.video.mime ?? 'video/mp4'
+      setShareFile(new File([blob], `hashwall-${tag}-${clip.video.sha256.slice(0, 8)}.${extFromMime(mime)}`, { type: mime }))
+    } catch (err) {
+      toast(`Préparation impossible : ${err instanceof Error ? err.message : err}`, 'error')
+    } finally {
+      setPreparing(false)
+    }
+  }
+  const doShare = async () => {
+    if (!shareFile) return
+    const r = await shareVideoFile(shareFile, `#${tag} — vidéo HashWall`, clipShareUrl(clip, tag, settings.relays))
+    if (r === 'saved') toast('Vidéo enregistrée et lien copié : publiez-la sur le réseau de votre choix.', 'ok')
+    onClose()
+  }
+
   const download = async () => {
     if (!clip.video.sha256) return
     setDownloading(true)
@@ -168,6 +192,15 @@ export function ClipMenu({
         >
           <IconLink size={20} className="text-muted" /> Copier le lien de la vidéo
         </button>
+        {shareFile ? (
+          <button className={`${item} text-accent`} onClick={() => void doShare()} data-testid="share-file-go">
+            <IconShare size={20} /> Partager le fichier maintenant
+          </button>
+        ) : (
+          <button className={item} onClick={() => void prepareShare()} disabled={preparing || !clip.video.sha256} data-testid="share-file">
+            <IconShare size={20} className="text-muted" /> {preparing ? 'Préparation de la vidéo…' : 'Partager la vidéo sur un réseau social'}
+          </button>
+        )}
         <button className={item} onClick={download} disabled={downloading || !clip.video.sha256}>
           <IconDownload size={20} className="text-muted" /> {downloading ? 'Téléchargement et vérification…' : 'Télécharger (empreinte vérifiée)'}
         </button>

@@ -12,7 +12,7 @@ Interface, documentation, messages de commit et commentaires : **français**. Id
 ## Commandes
 ```bash
 npm run typecheck      # tsc --noEmit
-npm test               # Vitest (src/**/*.test.ts) — ~130 tests, < 5 s
+npm test               # Vitest (src/**/*.test.ts) — ~155 tests, < 5 s
 npm run build          # dist/ (CSP injectée, sw.js généré)
 npm run e2e            # build e2e + Playwright : relais et 7 serveurs Blossom simulés (~5 min)
 E2E_FULL=1 npm run e2e # même chose avec la vraie limite de 60 s
@@ -91,6 +91,10 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
     « Revenir à l'original ». La caméra ne propose que « Sans flou » / « Tout flou ». Second passage
     (`face-pass.ts`, `face-plan.ts`) : rien n'est écrit ni envoyé avant la décision de l'utilisateur.
     L'E2E mesure le **fichier final** (ressemblance < 0,65 ; net ≈ 0,85–0,92).
+17. **Montée en charge** (`docs/CAPACITE.md`) : on **publie** sur tous les relais mais on n'en **lit** que
+    `READ_RELAYS` (6) tirés par visite (`readRelays`/`useReadRelays`) ; préservation automatique limitée
+    (1/20, délai 5–60 s, arrêt à 6 copies) ; rotation des copies vidéo par visite ; fil fenêtré.
+18. **Filigrane** incrusté dans chaque vidéo filmée (`CaptureSession.watermark`, `VITE_WATERMARK_NAME`).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la

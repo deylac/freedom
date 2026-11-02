@@ -11,5 +11,7 @@ interface ImportMetaEnv {
   readonly VITE_OTS_CALENDARS?: string
   readonly VITE_BTC_EXPLORERS?: string
   readonly VITE_MIRRORS?: string
+  readonly VITE_WATERMARK_NAME?: string
+  readonly VITE_SITE_URL?: string
   readonly VITE_PROJECT_NPUB?: string
 }

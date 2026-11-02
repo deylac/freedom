@@ -181,3 +181,30 @@ export async function shareLink(url: string, title: string): Promise<'shared' | 
   }
   return (await copyText(url)) ? 'copied' : 'failed'
 }
+
+/**
+ * Partage du FICHIER vidéo (Instagram, TikTok, WhatsApp, Signal, X… acceptent un fichier, pas un lien
+ * vers une application web). Doit être appelé directement dans le geste de l'utilisateur (Safari).
+ * Sans partage de fichiers : le fichier est enregistré et le lien copié.
+ */
+export async function shareVideoFile(file: File, text: string, url: string): Promise<'shared' | 'saved'> {
+  if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], text: `${text}\n${url}` })
+      return 'shared'
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return 'shared'
+    }
+  }
+  const objectUrl = URL.createObjectURL(file)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = file.name
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
+  await copyText(url)
+  return 'saved'
+}

@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MAX_CLIP_MS, MAX_UPLOAD_BYTES } from '../config'
+import { MAX_CLIP_MS, MAX_UPLOAD_BYTES, WATERMARK_NAME } from '../config'
 import { updateSettings } from '../lib/storage/settings'
 import { useSettings, useWakeLock } from '../hooks/basics'
 import { formatBytes, formatDuration } from '../lib/format'
+import { wallUrl } from '../lib/hashtag'
 import { detectCaptureSupport } from '../lib/media/mime'
 import type { PassStage } from '../lib/media/face-pass'
 import { blurFacesAfter, canBlurFacesAfter, CaptureError, CaptureSession, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
 import { isDurable } from '../lib/storage/outbox'
-import { IconCheck, IconClose, IconFace, IconMic, IconRetry, IconSwitch } from './icons'
-import { Button, Toggle, useToast } from './ui'
+import { IconCheck, IconClose, IconFace, IconMic, IconRetry, IconShare, IconSwitch } from './icons'
+import { Button, shareVideoFile, Toggle, useToast } from './ui'
 
 type Phase = 'starting' | 'ready' | 'recording' | 'processing' | 'review' | 'error'
 
@@ -95,6 +96,8 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality)
     s.maxMs = total
     s.filter = filter
+    // Filigrane : nom du projet, mur, et adresse d'où l'application est servie (miroir compris).
+    s.watermark = [`${WATERMARK_NAME} · #${tag}`, `${location.host}${location.pathname}`.replace(/\/$/, '')]
     session.current = s
     s.open()
       .then(() => setPhase((p) => (p === 'starting' ? 'ready' : p)))
@@ -318,6 +321,7 @@ function Review({
   onChange: (rec: Recording) => void
   onPublish: (caption: string, contentWarning?: string) => Promise<void>
 }) {
+  const toast = useToast()
   const url = useMemo(() => URL.createObjectURL(recording.blob), [recording.blob])
   useEffect(() => () => URL.revokeObjectURL(url), [url])
   const [countdown, setCountdown] = useState<number | null>(autoPublish ? AUTO_PUBLISH_SECONDS : null)
@@ -401,6 +405,21 @@ function Review({
             Vérifiez l’aperçu avant de publier.
           </p>
         )}
+        <Button
+          variant="ghost"
+          className="w-full"
+          data-testid="share-file"
+          disabled={blurring}
+          onClick={() => {
+            pause()
+            const file = new File([recording.blob], `hashwall-${tag}-${Date.now()}.${recording.ext}`, { type: recording.mime })
+            void shareVideoFile(file, `#${tag} — filmé avec HashWall`, wallUrl(tag)).then((r) => {
+              if (r === 'saved') toast('Vidéo enregistrée et lien du mur copié : publiez-la sur le réseau de votre choix.', 'ok')
+            })
+          }}
+        >
+          <IconShare size={18} /> Partager la vidéo ailleurs (Instagram, TikTok, WhatsApp…)
+        </Button>
         <div className="rounded-xl border border-line p-2.5 text-xs" data-testid="face-blur">
           {blurring ? (
             <p className="text-white" role="status">
