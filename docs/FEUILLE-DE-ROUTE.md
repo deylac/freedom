@@ -44,6 +44,7 @@ Rien à coder : une grille à faire remplir à l'utilisateur, résultats à repo
 | Signaler une vidéo → masquée ; Réglages → réafficher | | | | |
 | Supprimer sa vidéo (Réglages → Mes vidéos) | | | | |
 | Fichier téléchargé inspecté avec **exiftool** : pas de GPS / modèle | | | | |
+| Réglages → Diagnostic → **Banc d'essai des formats** : envoyer le rapport (tailles H.264 / HEVC / AV1, relecture) | | | | |
 
 Points d'attention connus : Firefox enregistre en WebM (lisible sur iOS ≥ 17.4 seulement) ;
 Android peut proposer plusieurs caméras arrière (on prend `facingMode: environment`).

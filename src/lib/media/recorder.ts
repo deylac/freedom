@@ -128,6 +128,11 @@ export class CaptureSession {
     return !!this.audioTrack
   }
 
+  /** Piste micro brute (banc d'essai des formats : plusieurs enregistreurs sur la même image). */
+  get microphone(): MediaStreamTrack | null {
+    return this.audioTrack
+  }
+
   async open(): Promise<void> {
     let stream: MediaStream
     try {

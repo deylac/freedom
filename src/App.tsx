@@ -12,6 +12,7 @@ import { NetworkBanner } from './components/NetworkBanner'
 import { PublishTray } from './components/PublishTray'
 import { QrModal } from './components/QrModal'
 import { RescueSheet } from './components/RescueSheet'
+import { CodecBenchSheet } from './components/CodecBenchSheet'
 import { SettingsSheet } from './components/SettingsSheet'
 import { TermsModal } from './components/TermsModal'
 import { ToastProvider } from './components/ui'
@@ -21,7 +22,7 @@ export default function App() {
   const [route, navigate] = useHashRoute()
   const settings = useSettings()
   const [bundleJob, setBundleJob] = useState<string | null>(null)
-  const [overlay, setOverlay] = useState<'none' | 'terms' | 'capture' | 'qr' | 'settings' | 'rescue' | 'import'>('none')
+  const [overlay, setOverlay] = useState<'none' | 'terms' | 'capture' | 'qr' | 'settings' | 'rescue' | 'import' | 'codecs'>('none')
 
   // Reprise des envois interrompus (fermeture d'onglet, coupure réseau).
   useEffect(() => {
@@ -80,7 +81,8 @@ export default function App() {
       {overlay === 'terms' && tag && <TermsModal onAccept={() => setOverlay('capture')} onClose={close} />}
       {overlay === 'capture' && tag && <CaptureScreen tag={tag} onClose={close} />}
       {overlay === 'qr' && tag && <QrModal tag={tag} onClose={close} />}
-      {overlay === 'settings' && <SettingsSheet onClose={close} onRescue={() => setOverlay('rescue')} onImport={() => setOverlay('import')} />}
+      {overlay === 'settings' && <SettingsSheet onClose={close} onRescue={() => setOverlay('rescue')} onImport={() => setOverlay('import')} onCodecBench={() => setOverlay('codecs')} />}
+      {overlay === 'codecs' && <CodecBenchSheet onClose={close} />}
       {overlay === 'import' && <BundleImportSheet onClose={close} />}
       {bundleJob && <BundleShareSheet jobId={bundleJob} onClose={() => setBundleJob(null)} />}
       {overlay === 'rescue' && <RescueSheet tag={tag} onClose={close} />}

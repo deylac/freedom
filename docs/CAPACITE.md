@@ -42,6 +42,26 @@ C'est la couche la plus sollicitée : une vidéo de 30 s ≈ 4 Mo ; regardée pa
   efficace pour l'éditeur : **un serveur Blossom derrière un CDN** (ou un Blossom payant) ajouté en tête
   de liste, la réplication et la rotation faisant le reste.
 
+### Alléger les fichiers : mesurer avant de changer de format
+
+Réglage actuel : 720 × 1280, 30 i/s, H.264 **Baseline** à 2 Mbit/s + son 96 kbit/s ≈ **16 Mo par
+minute**. Pistes, par ordre de sûreté :
+
+1. H.264 **High**, 1,5 Mbit/s, son 64 kbit/s ≈ 11,5 Mo/min (−30 %), lisible partout.
+2. **Double version** : H.264 optimisé (universel, part en premier) + **HEVC** ≈ 8,5 Mo/min (−45 à
+   −50 %) envoyé ensuite dans la voie de réplication, sur moins de serveurs. Chaque spectateur ne
+   télécharge que la version que son appareil sait lire. Rentable dès quelques vues ; décisif sur les
+   vidéos virales, qui sont celles qui saturent les serveurs.
+3. AV1 : écarté pour l'instant (encodage logiciel trop lent sur la plupart des Android, lecture
+   limitée aux iPhone 15 Pro et plus récents).
+
+Les gains annoncés par la littérature (30 à 50 %) viennent d'encodeurs lents de serveurs ; ceux d'un
+téléphone en direct sont plus faibles. D'où le **banc d'essai** (Réglages → Diagnostic → « Banc
+d'essai des formats vidéo ») : sonde de ce que l'appareil sait enregistrer, encoder en matériel et
+lire, puis 20 s filmées **simultanément** dans chaque format (même image, tailles comparables, et
+preuve que deux encodeurs tournent en parallèle). Rapport texte à transmettre ; rien n'est envoyé.
+Décision à prendre sur les mesures réelles (iPhone, Android milieu de gamme).
+
 ## 4. Le navigateur de chaque visiteur
 
 - Mur viral (centaines de vidéos, flux en direct) : le fil ne rend que **3 vidéos de part et d'autre**

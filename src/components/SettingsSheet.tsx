@@ -24,7 +24,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const lines = (s: string) => s.split(/[\s,]+/).map((l) => l.trim()).filter(Boolean)
 
-export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => void; onRescue?: () => void; onImport?: () => void }) {
+export function SettingsSheet({
+  onClose,
+  onRescue,
+  onImport,
+  onCodecBench,
+}: {
+  onClose: () => void
+  onRescue?: () => void
+  onImport?: () => void
+  onCodecBench?: () => void
+}) {
   const settings = useSettings()
   const toast = useToast()
   usePersonalVersion()
@@ -254,6 +264,11 @@ export function SettingsSheet({ onClose, onRescue, onImport }: { onClose: () => 
             </>
           ) : (
             <p className="text-sm text-muted">Aucun envoi terminé sur cet appareil.</p>
+          )}
+          {onCodecBench && (
+            <Button variant="ghost" className="mt-3" onClick={onCodecBench}>
+              Banc d’essai des formats vidéo
+            </Button>
           )}
         </Section>
 

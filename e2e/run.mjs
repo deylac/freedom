@@ -1139,6 +1139,44 @@ await step('Voix robot en capture réelle : enregistrement et publication avec l
 // ---------------------------------------------------------------------------
 // Suppression par l'auteur (NIP-09 + BUD-12)
 
+await step('Banc d’essai des formats : sonde, enregistrement simultané, tailles comparées, rien n’est envoyé', async () => {
+  const page = await newPage({ mobile: true, extra: { 'hw:e2e:benchMs': '4000' } })
+  const outgoing = []
+  page.context().on('request', (r) => {
+    if (r.method() !== 'GET' || !/^(http:\/\/127\.0\.0\.1:4173|data:|blob:)/.test(r.url())) outgoing.push(`${r.method()} ${r.url()}`)
+  })
+  await page.goto(`${APP}#banc`)
+  await page.getByRole('button', { name: 'Réglages' }).click()
+  await page.getByRole('button', { name: /Banc d’essai des formats/ }).click()
+  // Sonde : Chromium enregistre et lit le H.264.
+  const h264 = page.locator('[data-testid=codec-probe] [data-family=h264]')
+  await h264.waitFor({ timeout: 10_000 })
+  assert.equal(await h264.getAttribute('data-record'), 'oui')
+  assert.equal(await h264.getAttribute('data-decode'), 'oui')
+  // Essai : la même image enregistrée en parallèle dans chaque format accepté.
+  await page.getByTestId('bench-run').click()
+  await page.getByTestId('bench-remaining').waitFor({ timeout: 10_000 })
+  await page.locator('[data-testid=bench-results] [data-variant=h264-actuel][data-playable=true]').waitFor({ timeout: 30_000 })
+  const sizes = await page.locator('[data-testid=bench-results] li').evaluateAll((els) =>
+    Object.fromEntries(els.map((e) => [e.dataset.variant, { bytes: Number(e.dataset.bytes), playable: e.dataset.playable }])),
+  )
+  assert.ok(sizes['h264-actuel'].bytes > 50_000, `référence trop petite : ${JSON.stringify(sizes)}`)
+  assert.ok(sizes['h264-opt'].bytes > 0 && sizes['h264-opt'].playable === 'true', `H.264 optimisé absent : ${JSON.stringify(sizes)}`)
+  // Le débit visé est plus bas : le fichier doit être plus léger que la référence.
+  assert.ok(sizes['h264-opt'].bytes < sizes['h264-actuel'].bytes, `H.264 optimisé pas plus léger : ${JSON.stringify(sizes)}`)
+  // Rapport transmissible (presse-papiers en l'absence de partage natif).
+  await page.evaluate(() => { delete navigator.share })
+  await page.getByTestId('bench-report').click()
+  const report = await page.evaluate(() => navigator.clipboard.readText())
+  assert.match(report, /H\.264 optimisé \(High, 1,5 Mbit\/s\) : [\d,]+ Mo\/min/)
+  assert.match(report, /HEVC \(H\.265\) \| /)
+  // Rien n'est publié ni envoyé.
+  assert.deepEqual(outgoing, [], `requêtes sortantes : ${outgoing.join(', ')}`)
+  await page.context().close()
+  const v = (k) => (sizes[k]?.bytes ? `${(sizes[k].bytes / 1000).toFixed(0)} ko` : 'n/a')
+  return `actuel ${v('h264-actuel')}, optimisé ${v('h264-opt')}, HEVC ${v('hevc')}, AV1 ${v('av1')}`
+})
+
 await step('Suppression : kind 5 + DELETE sur les serveurs, retirée des murs', async () => {
   const watcher = await newPage()
   await watcher.goto(`${APP}#14octobre`)
