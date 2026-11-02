@@ -167,3 +167,17 @@ qui échoue sur l'ancien code.
 | 11.5 | Flou opérationnel sur Chrome iOS, mais sur un selfie au miroir (téléphone tenu à la main) le rectangle, en retard sur le mouvement, ne couvrait qu'une partie du visage. | ✅ Chaque rectangle grandit avec l'âge de sa détection (+120 % de la taille du visage par seconde, de chaque côté). Test unitaire. Limite : un mouvement très brusque reste possible entre deux détections ; « Tout flou » pour les situations à risque. |
 | 11.6 | Après saisie dans « changer de mur », la page restait **zoomée et coupée** : iOS zoome sur tout champ dont le texte fait moins de 16 px. | ✅ 16 px minimum pour tous les champs sur écran tactile. E2E : aucun champ sous 16 px, aucune page plus large que l'écran. |
 | 11.7 | Bandeau « Aucun relais ne répond » affiché au réveil de l'onglet alors que les 16 relais se sont connectés ensuite. | ✅ Délai de 15 s compté au premier plan seulement, remis à zéro au retour de l'onglet. |
+
+## 12. Second passage de floutage des visages (2 nov.)
+
+Demande : « une vérification une fois la vidéo tournée ; mouvements brusques, plusieurs visages ; flou
+plus fin, uniquement sur les visages ».
+
+| # | Constat / choix | Traitement |
+|---|---|---|
+| 12.1 | En direct, un masque ne peut s'appuyer que sur le passé : il est toujours en retard sur le mouvement, d'où de gros rectangles « au cas où ». | ✅ **Second passage** après le tournage (`face-pass.ts`, WebCodecs via `mediabunny` 1.61.6, MPL-2.0, chargé à la demande) : analyse de 10 images/s, pistes par visage, **interpolation entre détections** (avant ET après chaque image), ellipse pixelisée serrée (marge 20 %). L'aperçu reste flouté en direct sur un calque. |
+| 12.2 | Vérification demandée. | ✅ La vidéo **produite** est ré-analysée (grille de tuiles décalée) ; un visage net trouvé rejoint le plan et la vidéo est rendue de nouveau ; ce qui résiste est entièrement pixelisé (échec fermé). Rapport affiché avant publication. |
+| 12.3 | Vie privée : la vidéo brute existe désormais un instant. | ✅ Mémoire seulement : jamais écrite dans la file d'envoi ni envoyée ; échec du second passage = vidéo abandonnée. Mode figé au début de chaque enregistrement. Navigateur sans WebCodecs : ancien floutage en direct. |
+| 12.4 | E2E : mesurer le **fichier final**, pas l'aperçu. | ✅ Fausse caméra avec 3 visages fixes + 1 visage qui **saute de 250 px toutes les 0,2 s** ; ressemblance des contours (corrélation des gradients) avec le visage net < 0,5 sur toutes les images (≈ 0,9 si net). |
+| 12.5 | Défauts trouvés par ce test : tuiles examinées à tour de rôle (petit visage vu toutes les 0,3 s seulement) ; seuil du contrôle trop haut (visage net à 0,50) ; piste d'un visage mobile qui absorbait un petit visage voisin (masque interpolé entre les deux). | ✅ Toutes les tuiles à chaque image analysée ; seuil 0,3 (les visages déjà pixelisés sont écartés par leur position) ; association par taille comparable et par distance croissante ; chaque détection masque aussi les images voisines (± 0,15 s). Tests unitaires sur les cas relevés. |
+| 12.6 | Durée : ~8 s pour 3,3 s de vidéo dans le Chromium de test (logiciel, 2 détecteurs). Sur iPhone : **à mesurer** (affichée dans le rapport). | ⚠️ Tuiles de 480 px, contrôle toutes les 0,5 s, jusqu'à 3 détecteurs en parallèle. Si c'est trop long sur téléphone : réduire à 5 analyses/s ou réutiliser les détections faites pendant le tournage. |

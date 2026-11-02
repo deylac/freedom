@@ -722,7 +722,7 @@ await step('Pagination : « Vidéos plus anciennes » charge la page précédent
 async function makeFaceVideo(path) {
   const page = await browser.newPage()
   const face = readFileSync(new URL('./fixtures/face.jpg', import.meta.url)).toString('base64')
-  const planes = await page.evaluate(async ([b64, SCENE_FACES]) => {
+  const planes = await page.evaluate(async ([b64, SCENE_FACES, MOVING_FACE]) => {
     const img = new Image()
     img.src = `data:image/jpeg;base64,${b64}`
     await img.decode()
@@ -738,7 +738,16 @@ async function makeFaceVideo(path) {
     }
     ctx.putImageData(bg, 0, 0)
     for (const [x, y, s] of SCENE_FACES) ctx.drawImage(img, x, y, s, s)
-    const d = ctx.getImageData(0, 0, W, H).data
+    const frames = []
+    // Bande unie en bas : un 4ᵉ visage y « saute » brusquement entre deux positions (mouvement brusque).
+    for (const [mx, my, ms] of MOVING_FACE) {
+      ctx.fillStyle = 'rgb(128,128,128)'
+      ctx.fillRect(0, 560, W, H - 560)
+      ctx.drawImage(img, mx, my, ms, ms)
+      frames.push(toYuv(ctx.getImageData(0, 0, W, H).data))
+    }
+    return frames
+    function toYuv(d) {
     const Y = new Uint8Array(W * H), U = new Uint8Array((W / 2) * (H / 2)), V = new Uint8Array((W / 2) * (H / 2))
     for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
       const k = (j * W + i) * 4
@@ -751,21 +760,25 @@ async function makeFaceVideo(path) {
     }
     const b64of = (a) => { let s = ''; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode(...a.subarray(i, i + 0x8000)); return btoa(s) }
     return [b64of(Y), b64of(U), b64of(V)]
-  }, [face, SCENE_FACES])
+    }
+  }, [face, SCENE_FACES, MOVING_FACE])
   await page.close()
-  const frame = Buffer.concat([Buffer.from('FRAME\n'), ...planes.map((p) => Buffer.from(p, 'base64'))])
+  const frames = planes.map((p) => Buffer.concat([Buffer.from('FRAME\n'), ...p.map((x) => Buffer.from(x, 'base64'))]))
   mkdirSync(new URL('./artifacts/', import.meta.url), { recursive: true })
-  writeFileSync(path, Buffer.concat([Buffer.from('YUV4MPEG2 W1280 H720 F30:1 Ip A1:1 C420jpeg\n'), frame, frame]))
+  writeFileSync(path, Buffer.concat([Buffer.from('YUV4MPEG2 W1280 H720 F30:1 Ip A1:1 C420jpeg\n'), ...frames]))
 }
 
 // Visages dans la bande centrale de la scène (x de 437,5 à 842,5 : ce que garde le recadrage 9:16).
 const SCENE_FACES = [[500, 20, 180], [620, 260, 110], [520, 470, 70]]
+// 4ᵉ visage : 6 images à gauche, 6 images à droite, en boucle (saut de 250 px toutes les 0,2 s).
+const MOVING_FACE = [...Array(6).fill([450, 580, 130]), ...Array(6).fill([690, 580, 130])]
 // Scène → canvas 720×1280 : échelle 1280/720, décalage horizontal de 437,5 px (recadrage centré).
 const K = 1280 / 720
 const toCanvas = (x, y, w, h) => ({ x: Math.round((x - 437.5) * K), y: Math.round(y * K), w: Math.round(w * K), h: Math.round(h * K) })
 // Visage = 30,6 % du recadrage, décalé de 15,9 % / 20,6 % (cf. e2e/fixtures/face.jpg)
 const FACES = SCENE_FACES.map(([x, y, s]) => toCanvas(x + s * 0.159, y + s * 0.206, s * 0.306, s * 0.306))
-const BACKGROUND = toCanvas(700, 560, 90, 90)
+const BACKGROUND = toCanvas(775, 110, 60, 60)
+const MOVING = [[450, 580, 130], [690, 580, 130]].map(([x, y, sz]) => toCanvas(x + sz * 0.159, y + sz * 0.206, sz * 0.306, sz * 0.306))
 
 /**
  * « Platitude » d'une zone du canvas : part des pixels voisins strictement identiques.
@@ -773,8 +786,14 @@ const BACKGROUND = toCanvas(700, 560, 90, 90)
  */
 const flatness = (page, r) =>
   page.evaluate((r) => {
-    const c = document.querySelector('canvas[aria-label="Aperçu de la caméra"]')
-    const d = c.getContext('2d').getImageData(r.x, r.y, r.w, r.h).data
+    // Ce que voit l'utilisateur : image + calque de floutage (le cas échéant).
+    const base = document.querySelector('canvas[aria-label="Aperçu de la caméra"]')
+    const overlay = document.querySelector('[data-testid=blur-overlay]')
+    const c = new OffscreenCanvas(base.width, base.height)
+    const cx = c.getContext('2d')
+    cx.drawImage(base, 0, 0)
+    if (overlay) cx.drawImage(overlay, 0, 0)
+    const d = cx.getImageData(r.x, r.y, r.w, r.h).data
     let same = 0, n = 0
     for (let j = 0; j < r.h; j++) for (let i = 0; i < r.w - 1; i++) {
       const k = (j * r.w + i) * 4
@@ -801,7 +820,10 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
     permissions: ['camera', 'microphone'],
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.96 Mobile/15E148 Safari/604.1',
   })
-  await context.addInitScript((s) => localStorage.setItem('hw:settings', JSON.stringify(s)), { ...settings, termsAcceptedVersion: 1 })
+  await context.addInitScript((s) => {
+    localStorage.setItem('hw:settings', JSON.stringify(s))
+    localStorage.setItem('hw:e2e:maxMs', '3000')
+  }, { ...settings, termsAcceptedVersion: 1, autoPublish: false })
   const external = []
   context.on('request', (r) => { if (!/^(http:\/\/127\.0\.0\.1|data:|blob:)/.test(r.url())) external.push(r.url()) })
   const page = await context.newPage()
@@ -828,8 +850,105 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
   const after = { faces: await Promise.all(FACES.map((f) => flatness(page, f))), bg: await flatness(page, BACKGROUND) }
   after.faces.forEach((f, i) => assert.ok(f > 0.8, `visage ${i} (${FACES[i].w} px) non flouté : platitude ${f.toFixed(2)} (avant ${base.faces[i].toFixed(2)})`))
   assert.ok(after.bg < 0.2, `le fond ne devrait plus être pixelisé (platitude ${after.bg.toFixed(2)})`)
+
+  // Référence : contours des visages NETS dans l'image brute (canvas enregistré, sans le calque).
+  // Pour le visage mobile, on attend une image où il est à gauche puis une où il est à droite.
+  const sharp = await page.evaluate(async (regions) => {
+    const c = document.querySelector('canvas[aria-label="Aperçu de la caméra"]')
+    const cx = c.getContext('2d')
+    const grad = (r) => {
+      const d = cx.getImageData(r.x, r.y, r.w, r.h).data
+      const out = []
+      for (let j = 0; j < r.h; j++) for (let i = 0; i < r.w - 1; i++) {
+        const k = (j * r.w + i) * 4
+        out.push(0.299 * (d[k + 4] - d[k]) + 0.587 * (d[k + 5] - d[k + 1]) + 0.114 * (d[k + 6] - d[k + 2]))
+      }
+      return out
+    }
+    const energy = (g) => g.reduce((a, b) => a + b * b, 0) / g.length
+    const refs = []
+    for (const r of regions) {
+      let g = grad(r)
+      for (let i = 0; i < 60 && energy(g) < 4; i++) {
+        await new Promise((res) => setTimeout(res, 50))
+        g = grad(r)
+      }
+      refs.push(g)
+    }
+    return refs
+  }, [...FACES, ...MOVING])
+
+  // Second passage : enregistrement puis contrôle de la VIDÉO FINALE, image par image.
+  await page.getByTestId('record').click()
+  await page.getByTestId('review').waitFor({ timeout: 120_000 })
+  const report = Object.fromEntries(
+    await Promise.all(['data-faces', 'data-corrected', 'data-full', 'data-ms', 'data-steps'].map(async (a) => [a, await page.getByTestId('faces-report').getAttribute(a)])),
+  )
+  const final = await page.evaluate(async ([regions, refs]) => {
+    const v = document.querySelector('[data-testid=review] video')
+    const probe = document.createElement('video')
+    probe.muted = true
+    probe.src = v.src
+    await new Promise((r) => (probe.onloadeddata = r))
+    const c = new OffscreenCanvas(720, 1280)
+    const cx = c.getContext('2d', { willReadFrequently: true })
+    const grad = (r) => {
+      const d = cx.getImageData(r.x, r.y, r.w, r.h).data
+      const out = []
+      for (let j = 0; j < r.h; j++) for (let i = 0; i < r.w - 1; i++) {
+        const k = (j * r.w + i) * 4
+        out.push(0.299 * (d[k + 4] - d[k]) + 0.587 * (d[k + 5] - d[k + 1]) + 0.114 * (d[k + 6] - d[k + 2]))
+      }
+      return out
+    }
+    // Ressemblance des contours (corrélation normalisée des gradients) : ≈ 1 si le visage net est
+    // reconnaissable, faible s'il est pixelisé (contours détruits) ou absent.
+    const ncc = (a, b) => {
+      let ab = 0, aa = 0, bb = 0
+      for (let i = 0; i < a.length; i++) { ab += a[i] * b[i]; aa += a[i] * a[i]; bb += b[i] * b[i] }
+      return aa && bb ? ab / Math.sqrt(aa * bb) : 0
+    }
+    const out = []
+    for (let t = 0.1; t < probe.duration - 0.05; t += 1 / 15) {
+      probe.currentTime = t
+      await new Promise((r) => (probe.onseeked = r))
+      cx.drawImage(probe, 0, 0, 720, 1280)
+      out.push({ t: Math.round(t * 100) / 100, sim: regions.map((r, i) => ncc(grad(r), refs[i])) })
+    }
+    // Témoin : une copie du visage net, simplement ré-encodée, ressemblerait-elle bien à la référence ?
+    return out
+  }, [[...FACES, ...MOVING], sharp])
+  const worst = final.reduce((m, f) => Math.max(m, ...f.sim), 0)
+  const worstAt = final.find((f) => Math.max(...f.sim) === worst)
+  if (worst >= 0.5) {
+    const png = await page.evaluate(async (t) => {
+      const v = document.querySelector('[data-testid=review] video')
+      const probe = document.createElement('video')
+      probe.muted = true
+      probe.src = v.src
+      await new Promise((r) => (probe.onloadeddata = r))
+      probe.currentTime = t
+      await new Promise((r) => (probe.onseeked = r))
+      const c = document.createElement('canvas')
+      c.width = 720; c.height = 1280
+      c.getContext('2d').drawImage(probe, 0, 0, 720, 1280)
+      return c.toDataURL('image/png').split(',')[1]
+    }, worstAt.t)
+    writeFileSync(new URL('./artifacts/visage-net.png', import.meta.url), Buffer.from(png, 'base64'))
+    const dbg = await page.evaluate(() => globalThis.__facePass)
+    const fmt = (fr) => fr.map((f) => `${f.t.toFixed(2)}:${f.boxes.map((b) => `${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.w)}@${(b.score ?? 0).toFixed(2)}`).join('|')}`).join('  ')
+    console.log('    [analyse]', fmt(dbg.analysis))
+    console.log('    [contrôle]', fmt(dbg.checked))
+    console.log('    [régions mobiles]', JSON.stringify(MOVING))
+    console.log('    [rendu]', dbg.renderLog.filter((r) => Math.abs(r.t - worstAt.t) < 0.15).map((r) => `${r.t.toFixed(3)}:${JSON.stringify(r.boxes.filter((b) => b[1] > 900))}`).join('  '))
+  }
+  console.log('    [ressemblance max par image]', final.map((f) => Math.max(...f.sim).toFixed(2)).join(' '))
+  assert.ok(final.length >= 20, `trop peu d'images contrôlées (${final.length})`)
+  assert.ok(worst < 0.5, `visage reconnaissable dans la vidéo finale à ${worstAt?.t} s (ressemblance ${worst.toFixed(2)} ; ${JSON.stringify(worstAt)})`)
+  assert.ok(Number(report['data-faces']) >= 4, `visages suivis : ${report['data-faces']} (4 attendus au moins)`)
+
   assert.deepEqual(external, [], `requêtes externes : ${external.join(', ')}`)
-  return `${count} visages détectés ; platitude des visages ${FACES.map((f, i) => `${f.w}px ${base.faces[i].toFixed(2)}→${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
+  return `vidéo finale : ${final.length} images contrôlées, ressemblance max ${worst.toFixed(2)} (< 0,5), ${report['data-faces']} visages suivis, ${report['data-corrected']} oubli(s) corrigé(s), traitement ${report['data-ms']} ms ${report['data-steps']} ; aperçu : ${count} visages, platitude des visages ${FACES.map((f, i) => `${f.w}px ${base.faces[i].toFixed(2)}→${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
   } finally {
     await faceBrowser.close()
   }

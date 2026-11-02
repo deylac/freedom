@@ -10,7 +10,9 @@
  * de caméra pendant l'enregistrement.
  */
 import { CAPTURE_FPS, CAPTURE_HEIGHT, CAPTURE_WIDTH, MAX_CLIP_MS, QUALITY_PROFILES, type QualityProfile } from '../../config'
+import type { VideoCodec } from 'mediabunny'
 import { baseMime, extFromMime } from '../blossom/urls'
+import type { FacePassReport, PassStage } from './face-pass'
 import { FaceTracker } from './face-tracker'
 import { blockFor, marginFor, padBox } from './faces'
 import { scrubVideoBlob, type ScrubReport } from './mp4-scrub'
@@ -33,6 +35,8 @@ export interface Recording {
   stoppedBy: 'user' | 'limit' | 'interrupted'
   /** Voix transformée par le vocodeur (non réversible). */
   voice: VoiceMode
+  /** Rapport du second passage de floutage des visages (absent : floutage en direct uniquement). */
+  faces?: FacePassReport
 }
 
 export type VoiceMode = 'natural' | 'robot'
@@ -105,6 +109,17 @@ export class CaptureSession {
   private tracker: FaceTracker | null = null
   private scratch = document.createElement('canvas')
   private closed = false
+  /** Codec du second passage (null : indisponible → floutage en direct ; undefined : vérification en cours). */
+  private postCodec: VideoCodec | null | undefined = undefined
+  /**
+   * Second passage décidé AU DÉBUT de l'enregistrement : la vidéo est alors enregistrée sans flou
+   * (en mémoire seulement) et l'aperçu flouté est dessiné sur le calque. Jamais modifié en cours
+   * d'enregistrement : une vidéo commencée en floutage direct le reste jusqu'au bout.
+   */
+  private postBlur = false
+  private overlayCtx: CanvasRenderingContext2D | null = null
+  /** Progression du second passage, pour l'interface. */
+  onProcessing?: (stage: PassStage, fraction: number) => void
   done: Promise<Recording> | null = null
 
   constructor(
@@ -112,7 +127,18 @@ export class CaptureSession {
     private readonly canvas: HTMLCanvasElement,
     private readonly mime: string,
     private readonly quality: QualityProfile,
+    overlay: HTMLCanvasElement | null = null,
   ) {
+    if (overlay) {
+      overlay.width = CAPTURE_WIDTH
+      overlay.height = CAPTURE_HEIGHT
+      this.overlayCtx = overlay.getContext('2d')
+    }
+    // Module du second passage (WebCodecs) chargé seulement quand la caméra s'ouvre.
+    void import('./face-pass')
+      .then((m) => m.postProcessCodec(CAPTURE_WIDTH, CAPTURE_HEIGHT))
+      .then((c) => (this.postCodec = c))
+      .catch(() => (this.postCodec = null))
     canvas.width = CAPTURE_WIDTH
     canvas.height = CAPTURE_HEIGHT
     const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true })
@@ -182,7 +208,7 @@ export class CaptureSession {
   private watchTracks(stream: MediaStream) {
     for (const track of stream.getTracks()) {
       track.addEventListener('ended', () => {
-        if (this.recording && track.kind === 'video' && this.camera?.getVideoTracks().includes(track)) {
+        if (this.recording && track.kind === 'video' && this.camera?.getVideoTracks().some((t) => t === track)) {
           this.stopReason = 'interrupted'
           this.recorder?.stop()
         }
@@ -231,7 +257,10 @@ export class CaptureSession {
         // AVANT toute pixelisation.
         this.tracker ??= new FaceTracker()
         this.tracker.feed(this.canvas, W, H)
-        if (!this.tracker.trusted) {
+        if (this.overlayPreview) {
+          // Second passage prévu : l'image enregistrée reste brute (en mémoire), l'aperçu est flouté sur le calque.
+          this.drawOverlay(W, H)
+        } else if (!this.tracker.trusted) {
           // Échec fermé : chargement, erreur ou résultats périmés → toute l'image.
           this.pixelate(0, 0, W, H, 28)
         } else {
@@ -242,10 +271,30 @@ export class CaptureSession {
         }
       }
     }
+    if (this.overlayCtx && !(this.filter === 'faces' && this.overlayPreview)) {
+      this.overlayCtx.clearRect(0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT)
+    }
     if (!this.closed) this.raf = requestAnimationFrame(this.draw)
   }
 
-  private pixelate(x: number, y: number, w: number, h: number, block: number) {
+  /** Aperçu flouté sur le calque plutôt que dans l'image enregistrée. */
+  private get overlayPreview(): boolean {
+    if (!this.overlayCtx) return false
+    return this.recorder ? this.postBlur : !!this.postCodec
+  }
+
+  private drawOverlay(W: number, H: number) {
+    const o = this.overlayCtx!
+    o.clearRect(0, 0, W, H)
+    if (!this.tracker!.trusted) this.pixelate(0, 0, W, H, 28, o)
+    else
+      for (const face of this.tracker!.faces) {
+        const p = padBox(face, marginFor(face), W, H)
+        this.pixelate(p.x, p.y, p.w, p.h, blockFor(face), o)
+      }
+  }
+
+  private pixelate(x: number, y: number, w: number, h: number, block: number, target: CanvasRenderingContext2D = this.ctx) {
     if (w < 2 || h < 2) return
     const tw = Math.max(1, Math.ceil(w / block))
     const th = Math.max(1, Math.ceil(h / block))
@@ -254,9 +303,9 @@ export class CaptureSession {
     const sctx = this.scratch.getContext('2d')
     if (!sctx) return
     sctx.drawImage(this.canvas, x, y, w, h, 0, 0, tw, th)
-    this.ctx.imageSmoothingEnabled = false
-    this.ctx.drawImage(this.scratch, 0, 0, tw, th, x, y, w, h)
-    this.ctx.imageSmoothingEnabled = true
+    target.imageSmoothingEnabled = false
+    target.drawImage(this.scratch, 0, 0, tw, th, x, y, w, h)
+    target.imageSmoothingEnabled = true
   }
 
   faceStatus(): FaceStatus {
@@ -270,6 +319,9 @@ export class CaptureSession {
   start(): Promise<Recording> {
     if (this.recorder) throw new Error('Enregistrement déjà lancé')
     const profile = QUALITY_PROFILES[this.quality]
+    const postBlur = this.filter === 'faces' && !!this.postCodec && !!this.overlayCtx
+    const postCodec = this.postCodec
+    this.postBlur = postBlur
     const canvasStream = this.canvas.captureStream(CAPTURE_FPS)
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()]
     const voice = this.voice
@@ -311,11 +363,13 @@ export class CaptureSession {
             }
           }, this.maxMs),
         )
-        this.timers.push(
-          setTimeout(() => {
-            this.posterPromise ??= this.snapshotPoster()
-          }, 800),
-        )
+        // Vignette prise sur le canvas seulement s'il est déjà flouté ; sinon, issue du second passage.
+        if (!postBlur)
+          this.timers.push(
+            setTimeout(() => {
+              this.posterPromise ??= this.snapshotPoster()
+            }, 800),
+          )
       }
       recorder.onstop = async () => {
         this.timers.forEach(clearTimeout)
@@ -325,13 +379,49 @@ export class CaptureSession {
         this.voiceProc = null
         const elapsed = Math.min(performance.now() - this.startedAt, this.maxMs)
         try {
-          const poster = await (this.posterPromise ?? this.snapshotPoster())
-          const type = baseMime(recorder.mimeType || this.mime)
-          const raw = new Blob(this.chunks, { type })
+          let type = baseMime(recorder.mimeType || this.mime)
+          let raw = new Blob(this.chunks, { type })
           this.chunks = []
+          let poster: Blob | null
+          let faces: FacePassReport | undefined
+          if (postBlur && postCodec) {
+            // Second passage : la vidéo brute ne sort jamais d'ici. Échec = vidéo abandonnée.
+            const tracker = (this.tracker ??= new FaceTracker())
+            tracker.livePaused = true
+            const helpers: FaceTracker[] = []
+            try {
+              this.onProcessing?.('analyse', 0)
+              await tracker.ready()
+              // Détecteurs supplémentaires en parallèle selon les cœurs disponibles (facultatifs).
+              const extra = Math.max(0, Math.min(2, (navigator.hardwareConcurrency || 2) - 3))
+              for (let i = 0; i < extra; i++) helpers.push(new FaceTracker())
+              const ready = await Promise.all(helpers.map((h) => h.ready(20_000).then(() => h, () => null)))
+              const pool = [tracker, ...ready.filter((h): h is FaceTracker => !!h)]
+              let turn = 0
+              const { blurFacesInVideo } = await import('./face-pass')
+              const pass = await blurFacesInVideo(raw, (frame, mode) => pool[turn++ % pool.length].detect(frame, mode), {
+                codec: postCodec,
+                bitrate: profile.videoBitsPerSecond,
+                onProgress: this.onProcessing,
+              })
+              raw = pass.blob
+              type = 'video/mp4'
+              poster = pass.poster
+              faces = pass.report
+            } catch (err) {
+              throw new CaptureError(
+                `Floutage des visages impossible (${err instanceof Error ? err.message : err}) : la vidéo n’a pas été conservée. Refaites-la, ou choisissez « Tout flou ».`,
+                'unknown',
+              )
+            } finally {
+              helpers.forEach((h) => h.close())
+              tracker.livePaused = false
+            }
+          } else poster = await (this.posterPromise ?? this.snapshotPoster())
           const { blob, report } = await scrubVideoBlob(raw)
           const durationSec = Math.max(0.1, elapsed / 1000)
           resolve({
+            faces,
             blob,
             mime: type,
             ext: extFromMime(type),

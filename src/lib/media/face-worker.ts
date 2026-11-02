@@ -14,7 +14,12 @@ import { mergeBoxes, tileGrid, type Box } from './faces'
 
 export type FaceWorkerIn =
   | { type: 'init'; wasmBase: string; modelUrl: string; modelSha256: string }
-  | { type: 'detect'; id: number; frame: ImageBitmap }
+  /**
+   * `live` (défaut) : tuiles par groupes tournants, résultats fusionnés avec les groupes précédents.
+   * `analyze` : second passage, uniquement ce qui est vu sur CETTE image (le plan temporel fait le reste).
+   * `verify` : contrôle du rendu final, grille de tuiles DÉCALÉE d'une demi-tuile (autres cadrages).
+   */
+  | { type: 'detect'; id: number; frame: ImageBitmap; mode?: 'live' | 'analyze' | 'verify' }
   /** Nouvelle source (changement de caméra) : la couverture par tuiles repart de zéro. */
   | { type: 'reset' }
 
@@ -52,6 +57,8 @@ scope.XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: st
 // ---------------------------------------------------------------------------
 
 const TILE = 360
+/** Second passage : tuiles plus grandes (8 au lieu de 15 en 720×1280), visages dès ~30 px. */
+const PASS_TILE = 480
 const GROUPS = 3
 
 let detector: FaceDetector | null = null
@@ -94,24 +101,49 @@ function detectIn(source: ImageBitmap | OffscreenCanvas, dx = 0, dy = 0): Box[] 
   })
 }
 
+/** Grille décalée d'une demi-tuile : un visage coupé entre deux tuiles de la grille normale est entier ici. */
+function shiftedTiles(width: number, height: number) {
+  const half = Math.round(PASS_TILE * 0.375)
+  return tileGrid(width, height, PASS_TILE, 0.25).map((t) => ({
+    ...t,
+    x: Math.min(Math.max(0, t.x + half), Math.max(0, width - t.size)),
+    y: Math.min(Math.max(0, t.y + half), Math.max(0, height - t.size)),
+  }))
+}
+
+function detectTiles(frame: ImageBitmap, tiles: ReturnType<typeof tileGrid>, group: number): Box[] {
+  tileCanvas ??= new OffscreenCanvas(PASS_TILE, PASS_TILE)
+  const ctx = tileCanvas.getContext('2d')!
+  const found: Box[] = []
+  tiles.forEach((t, i) => {
+    if (i % GROUPS !== group) return
+    if (tileCanvas!.width !== t.size) tileCanvas!.width = tileCanvas!.height = t.size
+    ctx.drawImage(frame, t.x, t.y, t.size, t.size, 0, 0, t.size, t.size)
+    found.push(...detectIn(tileCanvas!, t.x, t.y))
+  })
+  return found
+}
+
 function detect(msg: Extract<FaceWorkerIn, { type: 'detect' }>) {
   const t0 = performance.now()
   const frame = msg.frame
+  const mode = msg.mode ?? 'live'
   try {
     const whole = detectIn(frame)
+    if (mode !== 'live') {
+      // Second passage : TOUTES les tuiles de chaque image. Avec un tiers des tuiles à tour de rôle,
+      // un petit visage n'était examiné que toutes les 0,3 s et pouvait passer inaperçu (constat E2E).
+      const tiles = mode === 'verify' ? shiftedTiles(frame.width, frame.height) : tileGrid(frame.width, frame.height, PASS_TILE, 0.25)
+      const found: Box[] = []
+      for (let g = 0; g < GROUPS; g++) found.push(...detectTiles(frame, tiles, g))
+      const boxes = mergeBoxes([...whole, ...found])
+      scope.postMessage({ type: 'faces', id: msg.id, boxes, ms: Math.round(performance.now() - t0), complete: true })
+      return
+    }
     const tiles = tileGrid(frame.width, frame.height, TILE, 0.25)
     const group = cycle % GROUPS
     cycle++
-    tileCanvas ??= new OffscreenCanvas(TILE, TILE)
-    const ctx = tileCanvas.getContext('2d')!
-    const found: Box[] = []
-    tiles.forEach((t, i) => {
-      if (i % GROUPS !== group) return
-      if (tileCanvas!.width !== t.size) tileCanvas!.width = tileCanvas!.height = t.size
-      ctx.drawImage(frame, t.x, t.y, t.size, t.size, 0, 0, t.size, t.size)
-      found.push(...detectIn(tileCanvas!, t.x, t.y))
-    })
-    groupBoxes[group] = found
+    groupBoxes[group] = detectTiles(frame, tiles, group)
     const boxes = mergeBoxes([...whole, ...groupBoxes.flat()])
     scope.postMessage({ type: 'faces', id: msg.id, boxes, ms: Math.round(performance.now() - t0), complete: cycle >= GROUPS })
   } finally {

@@ -23,6 +23,7 @@
     "@mediapipe/tasks-vision": "1.1.1",
     "@noble/hashes": "^2.4.0",
     "blossom-client-sdk": "^5.1.0",
+    "mediabunny": "1.61.6",
     "nostr-tools": "^2.25.4",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",

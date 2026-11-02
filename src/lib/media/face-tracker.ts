@@ -27,6 +27,10 @@ export class FaceTracker {
   private sentAt = 0
   private nextId = 1
   private history = new FaceHistory()
+  private requests = new Map<number, { resolve: (boxes: Box[]) => void; reject: (err: Error) => void }>()
+  private readyWaiters: { resolve: () => void; reject: (err: Error) => void }[] = []
+  /** Pas d'analyse en direct pendant le second passage (le worker lui est réservé). */
+  livePaused = false
   private scratch: HTMLCanvasElement
 
   constructor(base = document.baseURI) {
@@ -50,11 +54,23 @@ export class FaceTracker {
     if (msg.type === 'ready') {
       this.state = 'ready'
       this.loadMs = msg.ms
+      this.readyWaiters.forEach((w) => w.resolve())
+      this.readyWaiters = []
     } else if (msg.type === 'error') {
       this.state = 'error'
       this.error = msg.message
       this.busy = false
+      this.requests.forEach((r) => r.reject(new Error(msg.message)))
+      this.requests.clear()
+      this.readyWaiters.forEach((w) => w.reject(new Error(msg.message)))
+      this.readyWaiters = []
     } else if (msg.type === 'faces') {
+      const pending = this.requests.get(msg.id)
+      if (pending) {
+        this.requests.delete(msg.id)
+        pending.resolve(msg.boxes)
+        return
+      }
       this.busy = false
       this.lastDetectionMs = msg.ms
       this.history.receive(msg.id, msg.boxes, msg.complete, performance.now())
@@ -88,7 +104,7 @@ export class FaceTracker {
    * Copie dans un canvas dédié : l'image envoyée ne peut pas contenir la pixelisation appliquée ensuite.
    */
   feed(source: CanvasImageSource, width: number, height: number) {
-    if (this.state !== 'ready') return
+    if (this.state !== 'ready' || this.livePaused) return
     // Réponse perdue (worker gelé) : on renvoie une image au bout de 5 s ; entre-temps `trusted` est faux.
     if (this.busy && performance.now() - this.sentAt < 5000) return
     this.busy = true
@@ -108,6 +124,36 @@ export class FaceTracker {
       .catch(() => {
         this.busy = false
       })
+  }
+
+  /** Attend le chargement du détecteur (rejet en cas d'erreur ou au-delà de `timeoutMs`). */
+  ready(timeoutMs = 60_000): Promise<void> {
+    if (this.state === 'ready') return Promise.resolve()
+    if (this.state === 'error') return Promise.reject(new Error(this.error ?? 'détecteur indisponible'))
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('chargement du détecteur trop long')), timeoutMs)
+      this.readyWaiters.push({
+        resolve: () => {
+          clearTimeout(timer)
+          resolve()
+        },
+        reject: (err) => {
+          clearTimeout(timer)
+          reject(err)
+        },
+      })
+    })
+  }
+
+  /** Analyse d'une image du second passage (l'image est transférée au worker). */
+  detect(frame: ImageBitmap, mode: 'analyze' | 'verify'): Promise<Box[]> {
+    if (this.state !== 'ready') return Promise.reject(new Error('détecteur non prêt'))
+    const id = this.nextId++
+    return new Promise((resolve, reject) => {
+      this.requests.set(id, { resolve, reject })
+      const msg: FaceWorkerIn = { type: 'detect', id, frame, mode }
+      this.worker.postMessage(msg, [frame])
+    })
   }
 
   close() {

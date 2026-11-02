@@ -43,7 +43,7 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 | Relais (supervision, NIP-42) | `src/lib/nostr/pool.ts` (`LiveSubscription`, `publishEvent`) |
 | Événements NIP-71/92/56/09, BUD-03 | `src/lib/nostr/events.ts` |
 | Client Blossom | `src/lib/blossom/client.ts`, `urls.ts`, `health.ts` (serveurs mis de côté) |
-| Capture canvas, MIME, nettoyage MP4 | `src/lib/media/` |
+| Capture canvas, MIME, nettoyage MP4 | `src/lib/media/` (visages : `face-tracker`, `face-history`, second passage `face-pass` + `face-plan`) |
 | Publication (2 voies), file IndexedDB | `src/lib/publish.ts`, `src/lib/storage/outbox.ts` |
 | État du mur, modération | `src/lib/wall-store.ts`, `src/lib/moderation/policy.ts` |
 | Lecteur anti-censure | `src/components/ResilientVideo.tsx` |
@@ -85,6 +85,9 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
     `durable`/`memory`) ; « Tout effacer » ne se termine que sur suppression **effective**. Ne jamais
     retirer une vidéo de « Mes vidéos » (ni sa clé) tant que sa suppression distante n'est pas confirmée.
 16. **Visages** : masques et confiance du détecteur expirent ensemble, datés à la capture (`face-history.ts`).
+    Second passage (`face-pass.ts`, `face-plan.ts`) : la vidéo brute ne quitte jamais la mémoire (ni file
+    d'envoi, ni réseau) ; échec = vidéo abandonnée ; le mode (direct ou second passage) est figé au
+    début de l'enregistrement. L'E2E « Visages » mesure le **fichier final** (ressemblance < 0,5).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la

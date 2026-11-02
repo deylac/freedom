@@ -4,6 +4,7 @@ import { updateSettings } from '../lib/storage/settings'
 import { useSettings, useWakeLock } from '../hooks/basics'
 import { formatBytes, formatDuration } from '../lib/format'
 import { detectCaptureSupport } from '../lib/media/mime'
+import type { PassStage } from '../lib/media/face-pass'
 import { CaptureError, CaptureSession, type FaceStatus, type FilterMode, type Recording } from '../lib/media/recorder'
 import { newIdentity } from '../lib/nostr/signer'
 import { createJob, publisher } from '../lib/publish'
@@ -48,6 +49,13 @@ function Ring({ remaining, total }: { remaining: number; total: number }) {
 }
 
 /** Libellés courts, toujours visibles (même sur un petit écran) : l'état du filtre ne doit pas être deviné. */
+const PASS_LABEL: Record<PassStage, string> = {
+  analyse: 'Recherche des visages…',
+  floutage: 'Floutage des visages…',
+  contrôle: 'Contrôle du résultat…',
+  correction: 'Correction…',
+}
+
 const FILTER_SHORT: Record<FilterMode, string> = {
   none: 'Sans flou',
   faces: 'Visages',
@@ -65,6 +73,8 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
   const toast = useToast()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
+  const [pass, setPass] = useState<{ stage: PassStage; fraction: number } | null>(null)
   const session = useRef<CaptureSession | null>(null)
   const [phase, setPhase] = useState<Phase>('starting')
   const [error, setError] = useState<string | null>(null)
@@ -86,7 +96,8 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
       setPhase('error')
       return
     }
-    const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality)
+    const s = new CaptureSession(videoRef.current!, canvasRef.current!, support.mime, settings.quality, overlayRef.current)
+    s.onProcessing = (stage, fraction) => setPass({ stage, fraction })
     s.maxMs = total
     s.filter = filter
     session.current = s
@@ -114,6 +125,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
     const s = session.current
     if (!s || phase !== 'ready') return
     setElapsed(0)
+    setPass(null)
     let done: Promise<Recording>
     try {
       done = s.start()
@@ -191,6 +203,14 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
         className="absolute inset-0 h-full w-full object-cover"
         style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' ? 'hidden' : 'visible' }}
         aria-label="Aperçu de la caméra"
+      />
+      {/* Calque de l'aperçu flouté : l'image enregistrée reste brute (en mémoire) jusqu'au second passage. */}
+      <canvas
+        ref={overlayRef}
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' ? 'hidden' : 'visible' }}
+        aria-hidden
+        data-testid="blur-overlay"
       />
 
       {phase === 'review' && recording && (
@@ -306,7 +326,15 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
                 />
               )}
             </div>
-            <span className="text-xs text-white/60">{phase === 'recording' ? 'Enregistrement…' : phase === 'processing' ? 'Finalisation…' : '60 secondes max · métadonnées GPS supprimées'}</span>
+            <span className="text-xs text-white/60" data-testid="capture-status">
+              {phase === 'recording'
+                ? 'Enregistrement…'
+                : phase === 'processing'
+                  ? pass
+                    ? `${PASS_LABEL[pass.stage]} ${Math.round(pass.fraction * 100)} %`
+                    : 'Finalisation…'
+                  : '60 secondes max · métadonnées GPS supprimées'}
+            </span>
           </div>
         </>
       )}
@@ -369,7 +397,20 @@ function Review({
           <span className="text-ok">✓ aucune métadonnée GPS / appareil</span>
           {recording.scrub.datesCleared > 0 && <span className="text-ok">✓ dates internes effacées</span>}
           {recording.voice === 'robot' && <span className="text-ok">✓ voix anonymisée</span>}
+          {recording.faces && (
+            <span className="text-ok" data-testid="faces-report" data-faces={recording.faces.faces} data-corrected={recording.faces.corrected} data-full={recording.faces.fullyPixelated.length} data-ms={recording.faces.ms} data-steps={JSON.stringify(recording.faces.steps)}>
+              ✓ {recording.faces.faces} visage{recording.faces.faces > 1 ? 's' : ''} flouté{recording.faces.faces > 1 ? 's' : ''} · résultat contrôlé
+              {recording.faces.corrected > 0 ? ` (${recording.faces.corrected} oubli${recording.faces.corrected > 1 ? 's' : ''} corrigé${recording.faces.corrected > 1 ? 's' : ''})` : ''}
+            </span>
+          )}
         </div>
+        {recording.faces && recording.faces.fullyPixelated.length > 0 && (
+          <p className="text-xs text-rec">
+            Un visage resté net malgré la correction : {recording.faces.fullyPixelated.length} passage
+            {recording.faces.fullyPixelated.length > 1 ? 's' : ''} entièrement pixelisé{recording.faces.fullyPixelated.length > 1 ? 's' : ''} par sécurité.
+            Vérifiez l’aperçu avant de publier.
+          </p>
+        )}
         {tooBig && <p className="text-xs text-rec">Fichier de {formatBytes(recording.size)} : certains serveurs gratuits (limite 20 Mio) le refuseront. Le mode « réseau saturé » des réglages réduit la taille.</p>}
         <input
           value={caption}
