@@ -3,7 +3,7 @@ import { useNow, useSettings } from '../hooks/basics'
 import { formatDuration, relativeTime } from '../lib/format'
 import { wallUrl } from '../lib/hashtag'
 import type { Verdict } from '../lib/moderation/policy'
-import { mayAutoPreserve, preservationPlan, preserveClip } from '../lib/preserve'
+import { autoPreserveDelayMs, e2eAlwaysPreserve, mayAutoPreserve, preservationPlan, preserveClip } from '../lib/preserve'
 import { clipNaddr, type Clip } from '../lib/nostr/events'
 import type { WallStore } from '../lib/wall-store'
 import { ResilientVideo, type SourceState } from './ResilientVideo'
@@ -88,6 +88,7 @@ export function FeedItem({
   store,
   active,
   near,
+  windowed = false,
   muted,
   onToggleMute,
   onMenu,
@@ -99,6 +100,8 @@ export function FeedItem({
   store: WallStore | null
   active: boolean
   near: boolean
+  /** Hors de la fenêtre de rendu : emplacement vide de même hauteur (montée en charge). */
+  windowed?: boolean
   muted: boolean
   onToggleMute: () => void
   onMenu: (clip: Clip, source: SourceState | null) => void
@@ -110,18 +113,32 @@ export function FeedItem({
   const share = useShare(clip, tag)
   const masked = verdict.status === 'warn' && !revealed
 
-  // Préservation automatique : après 5 s de visionnage d'une vidéo sans aucun signalement,
-  // copie de serveur à serveur (aucun coût pour le forfait ; clé jetable).
+  // Préservation automatique : pendant le visionnage d'une vidéo sans aucun signalement, copie de
+  // serveur à serveur (aucun coût pour le forfait ; clé jetable). Un spectateur sur 20 seulement, après
+  // un délai aléatoire, et seulement si la vidéo n'a pas déjà assez de copies (montée en charge).
   const playing = active && source?.url ? source.url : null
   useEffect(() => {
     if (!playing || verdict.status !== 'visible' || verdict.unverified > 0) return
     const id = setTimeout(() => {
-      if (!mayAutoPreserve(clip.video.sha256)) return
-      const plan = preservationPlan(clip, store?.copyServersOf(clip.video.sha256) ?? [], store?.knownServers() ?? [], playing)
+      const copies = store?.copyServersOf(clip.video.sha256) ?? []
+      const known = new Set([...copies, clip.video.url, ...clip.video.fallbacks].map((u) => new URL(u).origin)).size
+      if (!mayAutoPreserve(clip.video.sha256, Date.now(), known, e2eAlwaysPreserve() ? 0 : Math.random())) return
+      const plan = preservationPlan(clip, copies, store?.knownServers() ?? [], playing)
       void preserveClip(clip, plan.sources, plan.holders, plan.candidates, 2).catch(() => {})
-    }, 5000)
+    }, e2eAlwaysPreserve() ? 5000 : autoPreserveDelayMs())
     return () => clearTimeout(id)
   }, [playing, clip, store, verdict])
+
+  // Fil de centaines de vidéos (mur viral) : seules celles proches de l'écran ont un contenu ; les
+  // autres gardent le même élément <section> (le défilement et l'observateur restent valides).
+  if (windowed)
+    return (
+      <section
+        className="relative h-[100dvh] w-full snap-start snap-always overflow-hidden bg-black"
+        data-clip-key={clip.key}
+        aria-label={clip.alt || clip.title}
+      />
+    )
 
   return (
     <section

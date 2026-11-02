@@ -9,12 +9,18 @@ import { ClipMenu, ResilienceSheet } from './ClipSheets'
 import { Header } from './Header'
 import { IconBack, IconPlus } from './icons'
 import type { SourceState } from './ResilientVideo'
+import { Button } from './ui'
 
 type Target = { clip: Clip; source: SourceState | null }
 
 const shownCount = (n: number) => n > 0
 
 /** Fige l'ordre affiché quand l'utilisateur n'est pas en haut : les nouveautés attendent derrière une pastille. */
+/** Vidéos rendues de part et d'autre de celle à l'écran dans le fil (montée en charge). */
+const FEED_WINDOW = 3
+/** Cartes affichées par lot dans la grille (ordinateur). */
+const GRID_PAGE = 60
+
 function useFrozenOrder(items: WallItem[], live: boolean) {
   const keys = items.map((i) => i.clip.key).join('|')
   const [order, setOrder] = useState<string[]>([])
@@ -152,6 +158,7 @@ function FeedView({
           store={store}
           active={i === activeIndex}
           near={Math.abs(i - activeIndex) <= 1}
+          windowed={Math.abs(i - activeIndex) > FEED_WINDOW}
           muted={muted}
           onToggleMute={toggleMute}
           onMenu={(clip, source) => onMenu({ clip, source })}
@@ -198,6 +205,7 @@ export function WallView({
   const [menu, setMenu] = useState<Target | null>(null)
   const [resilience, setResilience] = useState<Target | null>(null)
   const [theater, setTheater] = useState<string | null>(null)
+  const [gridCount, setGridCount] = useState(GRID_PAGE)
   const [atTop, setAtTop] = useState(true)
   const [topSignal, setTopSignal] = useState(0)
   const { shown, fresh } = useFrozenOrder(snapshot.items, atTop)
@@ -246,7 +254,7 @@ export function WallView({
         </div>
       ) : desktop ? (
         <main className="mx-auto grid max-w-7xl grid-cols-2 gap-4 p-4 pb-32 sm:grid-cols-3 lg:grid-cols-4" data-testid="grid">
-          {shown.map((item) => (
+          {shown.slice(0, gridCount).map((item) => (
             <ClipCard
               key={item.clip.key}
               clip={item.clip}
@@ -257,7 +265,15 @@ export function WallView({
               onResilience={(clip, source) => setResilience({ clip, source })}
             />
           ))}
-          <div className="col-span-full">{olderButton}</div>
+          <div className="col-span-full">
+            {shown.length > gridCount ? (
+              <Button variant="ghost" className="mx-auto" onClick={() => setGridCount((n) => n + GRID_PAGE)} data-testid="grid-more">
+                Afficher plus ({shown.length - gridCount})
+              </Button>
+            ) : (
+              olderButton
+            )}
+          </div>
         </main>
       ) : (
         <FeedView

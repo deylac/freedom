@@ -16,6 +16,7 @@ import { handleMediaFallbacks } from 'blossom-client-sdk/media'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MAX_DECLARED_DURATION_S } from '../config'
 import { candidateUrls, extFromMime, hostOf } from '../lib/blossom/urls'
+import { visitSeed } from '../lib/nostr/pool'
 import type { Clip } from '../lib/nostr/events'
 
 const STALL_MS = 7000
@@ -27,12 +28,35 @@ export interface SourceState {
   failed: boolean
 }
 
+/**
+ * Montée en charge : chaque visiteur commence par une copie DIFFÉRENTE parmi celles déclarées par
+ * l'auteur (rotation selon une graine propre à la visite). 10 000 spectateurs se répartissent ainsi
+ * sur tous les serveurs qui détiennent la vidéo au lieu de saturer le premier. La bascule automatique
+ * reste la même si la copie choisie ne répond pas.
+ */
+export function spreadSources(declared: string[], seed: number): string[] {
+  if (declared.length < 2) return declared
+  const k = seed % declared.length
+  return [...declared.slice(k), ...declared.slice(0, k)]
+}
+
+/** Tests de bout en bout : ordre déclaré conservé (scénarios de censure écrits pour le serveur principal). */
+const spreadEnabled = (): boolean => {
+  if (import.meta.env.MODE !== 'e2e') return true
+  try {
+    return localStorage.getItem('hw:e2e:spread') === '1'
+  } catch {
+    return false
+  }
+}
+
 export function useCandidates(clip: Clip, extraServers: string[]): string[] {
   const { video } = clip
-  return useMemo(
-    () => candidateUrls([video.url, ...video.fallbacks], video.sha256, extFromMime(video.mime ?? 'video/mp4'), extraServers),
-    [video, extraServers],
-  )
+  return useMemo(() => {
+    const declared = [video.url, ...video.fallbacks]
+    const ordered = spreadEnabled() ? spreadSources(declared, visitSeed()) : declared
+    return candidateUrls(ordered, video.sha256, extFromMime(video.mime ?? 'video/mp4'), extraServers)
+  }, [video, extraServers])
 }
 
 export function ResilientVideo({

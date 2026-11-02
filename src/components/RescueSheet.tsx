@@ -3,7 +3,7 @@
  * et que faire si le réseau bloque les relais. Tout est généré localement (QR compris).
  */
 import { useMemo, useState } from 'react'
-import { useRelayStatus, useSettings } from '../hooks/basics'
+import { useReadRelays, useRelayStatus } from '../hooks/basics'
 import { knownMirrors, type Mirror } from '../lib/mirrors'
 import { serviceWorkerState } from '../lib/sw-status'
 import { QrSvg } from './QrModal'
@@ -18,8 +18,7 @@ const SOURCE_LABEL: Record<Mirror['source'], string> = {
 
 export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () => void }) {
   const toast = useToast()
-  const settings = useSettings()
-  const { connected, total } = useRelayStatus(settings.relays)
+  const { connected, total } = useRelayStatus(useReadRelays())
   const mirrors = useMemo(() => knownMirrors(), [])
   const [qr, setQr] = useState<string | null>(null)
   const sw = serviceWorkerState()

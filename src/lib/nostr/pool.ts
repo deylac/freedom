@@ -29,6 +29,54 @@ export function connectionStatus(relays: string[]): { connected: number; total: 
   return { connected: Object.values(perRelay).filter(Boolean).length, total: relays.length, perRelay }
 }
 
+// ---------------------------------------------------------------------------
+// Lecture répartie (montée en charge)
+
+/**
+ * Nombre de relais LUS par visiteur. On publie sur tous les relais configurés (16 par défaut), mais
+ * chaque visiteur n'en lit qu'un sous-ensemble tiré au hasard : avec 10 000 visiteurs, chaque relais
+ * reçoit ~10 000 × 6 / 16 ≈ 3 750 connexions au lieu de 10 000 (et chaque vidéo reste lisible tant
+ * qu'au moins un relais lu l'a reçue — elle est publiée partout).
+ */
+export const READ_RELAYS = 6
+
+/** Mélange déterministe (graine) : même sous-ensemble pendant toute la visite. */
+export function sampleRelays(relays: string[], n: number, seed: number): string[] {
+  const list = normalizeRelays(relays)
+  if (list.length <= n) return list
+  let x = seed >>> 0 || 1
+  const rand = () => {
+    x ^= x << 13
+    x ^= x >>> 17
+    x ^= x << 5
+    return (x >>> 0) / 4294967296
+  }
+  const shuffled = [...list]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled.slice(0, n)
+}
+
+let sessionSeed: number | null = null
+/** Graine propre à l'onglet (sessionStorage) : répartit les visiteurs sans rien envoyer à personne. */
+export function visitSeed(): number {
+  if (sessionSeed !== null) return sessionSeed
+  try {
+    const stored = Number(sessionStorage.getItem('hw:seed'))
+    if (stored > 0) return (sessionSeed = stored)
+    sessionSeed = 1 + Math.floor(Math.random() * 0xfffffffe)
+    sessionStorage.setItem('hw:seed', String(sessionSeed))
+  } catch {
+    sessionSeed = 1 + Math.floor(Math.random() * 0xfffffffe)
+  }
+  return sessionSeed
+}
+
+/** Relais à LIRE pour cette visite (les publications vont toujours à tous). */
+export const readRelays = (relays: string[], n = READ_RELAYS): string[] => sampleRelays(relays, n, visitSeed())
+
 /** Relais sur lesquels un événement a été vu (indicateur de résilience). */
 export function seenOn(eventId: string): string[] {
   return [...(pool.seenOn.get(eventId) ?? [])].map((r) => r.url)

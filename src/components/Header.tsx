@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { useRelayStatus, useSettings } from '../hooks/basics'
+import { useReadRelays, useRelayStatus } from '../hooks/basics'
 import { normalizeTag, type Route } from '../lib/hashtag'
 import { IconQr, IconSearch, IconSettings } from './icons'
 
 export function RelayBadge() {
-  const settings = useSettings()
-  const { connected, total } = useRelayStatus(settings.relays)
+  const reading = useReadRelays()
+  const { connected, total } = useRelayStatus(reading)
   const online = connected > 0
   return (
     <span

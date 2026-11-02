@@ -6,7 +6,7 @@ import { LiveSubscription, queryOnce } from '../lib/nostr/pool'
 import { identityPubkey } from '../lib/nostr/signer'
 import { hiddenKeys, localMutes } from '../lib/storage/personal'
 import { WallStore, type StoreContext, type WallSnapshot } from '../lib/wall-store'
-import { useSettings, usePersonalVersion } from './basics'
+import { useReadRelays, useSettings, usePersonalVersion } from './basics'
 import * as nip19 from 'nostr-tools/nip19'
 
 const probe = typeof document !== 'undefined' ? document.createElement('video') : null
@@ -54,6 +54,8 @@ function useKick(subs: Array<LiveSubscription | null>) {
 
 export function useWall(tag: string | null, focusPointer?: string) {
   const settings = useSettings()
+  // Lecture sur un sous-ensemble de relais (montée en charge) ; publication sur tous.
+  const reading = useReadRelays()
   const personal = usePersonalVersion()
 
   const context: StoreContext = useMemo(
@@ -83,7 +85,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
     // Abonnements des modérateurs : leurs contacts sont des signaleurs de confiance.
     if (settings.moderators.length) filters.push({ kinds: [KIND_FOLLOWS], authors: settings.moderators })
     const sub = new LiveSubscription({
-      relays: settings.relays,
+      relays: reading,
       filters,
       label: `wall:${tag}`,
       onevent: (e) => store.ingest(e),
@@ -94,7 +96,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
       sub.stop()
       setMainSub(null)
     }
-  }, [store, tag, settings.relays, settings.moderators])
+  }, [store, tag, reading, settings.moderators])
 
   // --- abonnement d'annotations : signalements, suppressions, listes de serveurs ---
   const targetsKey = useMemo(() => {
@@ -120,7 +122,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
     for (const pubkeys of chunks(t.pubkeys)) filters.push({ kinds: [KIND_SERVER_LIST], authors: pubkeys })
     if (filters.length === 0) return
     const sub = new LiveSubscription({
-      relays: settings.relays,
+      relays: reading,
       filters,
       label: 'annotations',
       onevent: (e) => store.ingest(e),
@@ -130,7 +132,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
       sub.stop()
       setAnnotationSub(null)
     }
-  }, [store, debouncedKey, settings.relays])
+  }, [store, debouncedKey, reading])
 
   useKick(useMemo(() => [mainSub, annotationSub], [mainSub, annotationSub]))
 
@@ -162,7 +164,7 @@ export function useWall(tag: string | null, focusPointer?: string) {
     setOlder('loading')
     const before = store.size
     const until = store.oldestCreatedAt()
-    const events = await queryOnce(settings.relays, { kinds: WALL_KINDS, '#t': [tag], limit: 100, ...(until ? { until: until - 1 } : {}) }, 6000)
+    const events = await queryOnce(reading, { kinds: WALL_KINDS, '#t': [tag], limit: 100, ...(until ? { until: until - 1 } : {}) }, 6000)
     events.forEach((e) => store.ingest(e))
     setOlder(store.size > before ? 'idle' : 'done')
   }

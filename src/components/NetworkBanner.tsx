@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useRelayStatus, useSettings } from '../hooks/basics'
+import { useReadRelays, useRelayStatus } from '../hooks/basics'
 import { IconAlert, IconClose } from './icons'
 
 /** Délai sans aucun relais joignable avant d'expliquer le blocage (le premier contact prend 1–3 s). */
@@ -10,8 +10,8 @@ export const BLOCKED_AFTER_MS = 15_000
  * Si aucun relais ne répond, on le dit et on propose les adresses de secours.
  */
 export function NetworkBanner({ onHelp }: { onHelp: () => void }) {
-  const settings = useSettings()
-  const { connected } = useRelayStatus(settings.relays)
+  const reading = useReadRelays()
+  const { connected } = useRelayStatus(reading)
   const [online, setOnline] = useState(() => navigator.onLine)
   const [blocked, setBlocked] = useState(false)
   const [dismissed, setDismissed] = useState(false)

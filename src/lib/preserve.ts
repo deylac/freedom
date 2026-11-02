@@ -100,9 +100,32 @@ let lastAuto = 0
 let todayCount = 0
 let today = ''
 
+/**
+ * Montée en charge : sur une vidéo virale, 10 000 spectateurs demanderaient chacun des copies en même
+ * temps — une attaque involontaire contre les serveurs. Chaque spectateur ne participe donc qu'avec
+ * une probabilité AUTO_PRESERVE_RATE, et plus personne ne copie une vidéo déjà présente sur
+ * ENOUGH_COPIES serveurs (copies annoncées comprises).
+ */
+export const AUTO_PRESERVE_RATE = 0.05
+
+/** Tests de bout en bout : participation systématique et délai court (option `hw:e2e:preserveAlways`). */
+export const e2eAlwaysPreserve = (): boolean => {
+  if (import.meta.env.MODE !== 'e2e') return false
+  try {
+    return localStorage.getItem('hw:e2e:preserveAlways') === '1'
+  } catch {
+    return false
+  }
+}
+export const ENOUGH_COPIES = 6
+
+/** Délai aléatoire avant la copie (étale les demandes ; laisse le temps aux annonces d'arriver). */
+export const autoPreserveDelayMs = (rand = Math.random()) => 5_000 + Math.round(rand * 55_000)
+
 /** Limites : une préservation toutes les 20 s, 50 par jour, jamais deux fois la même vidéo. */
-export function mayAutoPreserve(sha256: string | undefined, now = Date.now()): boolean {
+export function mayAutoPreserve(sha256: string | undefined, now = Date.now(), knownCopies = 0, rand = Math.random()): boolean {
   if (!sha256 || !getSettings().autoPreserve || alreadyPreserved(sha256)) return false
+  if (knownCopies >= ENOUGH_COPIES || rand >= AUTO_PRESERVE_RATE) return false
   const day = new Date(now).toISOString().slice(0, 10)
   if (day !== today) {
     today = day

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { parseHash, routeToHash, type Route } from '../lib/hashtag'
-import { connectionStatus } from '../lib/nostr/pool'
+import { connectionStatus, readRelays } from '../lib/nostr/pool'
 import { personalVersion, subscribePersonal } from '../lib/storage/personal'
 import { getSettings, subscribeSettings, type Settings } from '../lib/storage/settings'
 
@@ -137,4 +137,10 @@ export function useEscape(onEscape: () => void, enabled = true) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onEscape, enabled])
+}
+
+/** Relais lus pendant cette visite (sous-ensemble stable, voir `readRelays`). */
+export function useReadRelays(): string[] {
+  const settings = useSettings()
+  return useMemo(() => readRelays(settings.relays), [settings.relays])
 }

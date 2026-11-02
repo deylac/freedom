@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FEATURED_TAGS, SOURCE_URL } from '../config'
 import { useSettings } from '../hooks/basics'
 import { normalizeTag, type Route } from '../lib/hashtag'
 import { KIND_SHORT_VIDEO, nowSeconds } from '../lib/nostr/events'
-import { queryOnce } from '../lib/nostr/pool'
+import { queryOnce, readRelays } from '../lib/nostr/pool'
 import { persistentStorageAvailable } from '../lib/storage/local'
 import { RelayBadge, TagSwitcher } from './Header'
 import { IconSettings } from './icons'
@@ -57,7 +57,9 @@ function Chip({ tag, sub, onClick }: { tag: string; sub?: string; onClick: () =>
 
 export function Home({ navigate, onSettings }: { navigate: (r: Route) => void; onSettings: () => void }) {
   const settings = useSettings()
-  const trends = useTrending(settings.relays)
+  // Tendances : 3 relais suffisent (requête ponctuelle, coûteuse pour les relais à grande échelle).
+  const trendRelays = useMemo(() => readRelays(settings.relays, 3), [settings.relays])
+  const trends = useTrending(trendRelays)
   const go = (tag: string) => navigate({ view: 'wall', tag })
 
   return (
