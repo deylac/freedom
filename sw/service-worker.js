@@ -54,7 +54,7 @@ self.addEventListener('fetch', (event) => {
 
   // Détecteur de visages (WASM, modèle) : mis en cache au premier usage, puis hors ligne.
   const path = url.href.slice(self.registration.scope.length)
-  if (/^(mediapipe|models)\//.test(path)) {
+  if (/^(ort|models)\//.test(path)) {
     event.respondWith(
       caches.open(CACHE + '-ondemand').then((cache) =>
         cache.match(req).then(

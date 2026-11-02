@@ -200,9 +200,6 @@ for (const [cal, msg] of [
   }
 }
 
-// --- Hébergement du modèle MediaPipe (pour information) ---
-const model = await req('https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite', { method: 'HEAD', headers: { Origin: ORIGIN } })
-console.log(`=== modèle MediaPipe sur storage.googleapis.com : ${fmt(model)} acao=${model.h('access-control-allow-origin') ?? '-'}`)
 
 console.log('\n| Serveur | HEAD /upload (jeton) | CORS sur erreurs |\n|---|---|---|')
 for (const r of summary) console.log(`| ${r.server.replace('https://', '')} | ${r.upload || 'erreur'} | ${r.errCors ? 'oui' : 'non'} |`)

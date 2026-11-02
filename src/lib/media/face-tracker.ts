@@ -10,10 +10,11 @@ import type { Box } from './faces'
 import { FaceHistory } from './face-history'
 import type { FaceWorkerIn, FaceWorkerOut } from './face-worker'
 
-/** Empreinte de public/models/blaze_face_full_range.tflite (voir public/models/SHA256SUMS). */
-export const FACE_MODEL_SHA256 = '3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b'
-export const FACE_MODEL_PATH = './models/blaze_face_full_range.tflite'
-export const MEDIAPIPE_WASM_PATH = './mediapipe'
+/** Empreinte de public/models/face_detection_yunet_2023mar.onnx (voir public/models/SHA256SUMS). */
+export const FACE_MODEL_SHA256 = '8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4'
+export const FACE_MODEL_PATH = './models/face_detection_yunet_2023mar.onnx'
+/** Moteur ONNX Runtime (WebAssembly), servi par le site (vite.config.ts → dist/ort/). */
+export const ORT_WASM_PATH = './ort/'
 
 export type TrackerState = 'loading' | 'ready' | 'error'
 
@@ -43,7 +44,7 @@ export class FaceTracker {
     }
     const init: FaceWorkerIn = {
       type: 'init',
-      wasmBase: new URL(MEDIAPIPE_WASM_PATH, base).href,
+      wasmBase: new URL(ORT_WASM_PATH, base).href,
       modelUrl: new URL(FACE_MODEL_PATH, base).href,
       modelSha256: FACE_MODEL_SHA256,
     }

@@ -20,11 +20,11 @@
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
-    "@mediapipe/tasks-vision": "1.1.1",
     "@noble/hashes": "^2.4.0",
     "blossom-client-sdk": "^5.1.0",
     "mediabunny": "1.61.6",
     "nostr-tools": "^2.25.4",
+    "onnxruntime-web": "1.30.0",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

@@ -1,7 +1,8 @@
-# Modèle de détection de visages
+# Modèles embarqués
 
-`blaze_face_full_range.tflite` — MediaPipe Face Detector (BlazeFace, « full range »), Google,
-licence Apache-2.0. Téléchargé depuis
-`https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/`
-par `.github/workflows/fetch-models.yml` ; empreinte dans `SHA256SUMS`, vérifiée par l'application
-avant usage (`src/lib/media/face-tracker.ts`). Chargé uniquement quand on active « Visages floutés ».
+| Fichier | Origine | Licence | SHA-256 |
+|---|---|---|---|
+| `face_detection_yunet_2023mar.onnx` | [OpenCV Zoo — YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (232 589 octets) | MIT | voir `SHA256SUMS` |
+
+L'empreinte est vérifiée par le worker avant chaque chargement (`src/lib/media/face-tracker.ts`) :
+un fichier altéré est refusé (et l'image entière est alors pixelisée, échec fermé).

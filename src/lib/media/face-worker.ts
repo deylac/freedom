@@ -1,32 +1,33 @@
 /**
- * Worker de détection de visages (MediaPipe Tasks, modèle BlazeFace « full range », CPU).
+ * Worker de détection de visages : YuNet (OpenCV Zoo, licence MIT) exécuté par ONNX Runtime Web
+ * (WebAssembly, CPU, un fil). Remplace BlazeFace/MediaPipe depuis le 2 nov. (test réel : fausses
+ * alertes, petits visages de foule mal détectés ; YuNet est entraîné sur des foules, WIDER FACE).
  *
- * - Worker CLASSIQUE (format IIFE) : le chargeur de MediaPipe utilise importScripts.
- * - Garde-fou réseau : ce contexte n'a le droit de joindre que l'origine de l'application.
- *   (MediaPipe embarque une télémétrie vers odml.pa.googleapis.com ; elle est aussi neutralisée
- *   au build par vite.config.ts. Un worker chargé depuis un fichier n'hérite pas de la CSP de la page.)
+ * - Garde-fou réseau : ce contexte n'a le droit de joindre que l'origine de l'application
+ *   (modèle et moteur WebAssembly sont servis par le site lui-même, jamais par un CDN).
  * - Le modèle est vérifié par son SHA-256 avant usage.
- * - Ordonnancement : image entière à chaque cycle (gros visages, latence minimale) + un tiers des
- *   tuiles de 360 px par cycle (petits visages lointains rafraîchis tous les 3 cycles).
+ * - Entrée fixe 640 × 640 : `live` analyse l'image entière réduite ; `analyze` y ajoute des carrés
+ *   (petits visages) ; `verify` utilise des carrés décalés (autres cadrages).
  */
-import { FaceDetector, FilesetResolver } from '@mediapipe/tasks-vision'
-import { mergeBoxes, tileGrid, type Box } from './faces'
+import * as ort from 'onnxruntime-web/wasm'
+import type { Box } from './faces'
+import { decode, mapBack, nms, squarePlacements, toBgrPlanar, wholePlacement, YUNET_SIZE, type Placement } from './yunet'
 
 export type FaceWorkerIn =
   | { type: 'init'; wasmBase: string; modelUrl: string; modelSha256: string }
   /**
-   * `live` (défaut) : tuiles par groupes tournants, résultats fusionnés avec les groupes précédents.
-   * `analyze` : second passage, uniquement ce qui est vu sur CETTE image (le plan temporel fait le reste).
-   * `verify` : contrôle du rendu final, grille de tuiles DÉCALÉE d'une demi-tuile (autres cadrages).
+   * `live` (défaut) : image entière (aperçu en direct, latence minimale).
+   * `analyze` : second passage, image entière + carrés (petits visages).
+   * `verify` : contrôle du rendu final, image entière + carrés décalés.
    */
   | { type: 'detect'; id: number; frame: ImageBitmap; mode?: 'live' | 'analyze' | 'verify' }
-  /** Nouvelle source (changement de caméra) : la couverture par tuiles repart de zéro. */
+  /** Nouvelle source (changement de caméra). */
   | { type: 'reset' }
 
 export type FaceWorkerOut =
   | { type: 'ready'; ms: number }
   | { type: 'error'; message: string }
-  /** `complete` : toutes les tuiles ont été analysées au moins une fois (sinon, pixeliser toute l'image). */
+  /** `complete` : toute l'image a été analysée (sinon, pixeliser toute l'image). */
   | { type: 'faces'; id: number; boxes: Box[]; ms: number; complete: boolean }
 
 interface WorkerScope {
@@ -56,15 +57,13 @@ scope.XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: st
 
 // ---------------------------------------------------------------------------
 
-const TILE = 360
-/** Second passage : tuiles plus grandes (8 au lieu de 15 en 720×1280), visages dès ~30 px. */
-const PASS_TILE = 480
-const GROUPS = 3
+/** Score minimal transmis (le tri fin se fait côté page selon l'usage). */
+const MIN_SCORE = 0.5
 
-let detector: FaceDetector | null = null
-let cycle = 0
-const groupBoxes: Box[][] = Array.from({ length: GROUPS }, () => [])
-let tileCanvas: OffscreenCanvas | null = null
+let session: ort.InferenceSession | null = null
+let canvas: OffscreenCanvas | null = null
+/** ONNX Runtime n'accepte qu'une exécution à la fois par session : file d'attente. */
+let queue: Promise<unknown> = Promise.resolve()
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', data as BufferSource)
@@ -73,79 +72,48 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
 
 async function init(msg: Extract<FaceWorkerIn, { type: 'init' }>) {
   const t0 = performance.now()
+  if (typeof OffscreenCanvas === 'undefined') throw new Error('OffscreenCanvas indisponible (iOS 16 ou antérieur)')
   const res = await scope.fetch(msg.modelUrl)
   if (!res.ok) throw new Error(`modèle introuvable (HTTP ${res.status})`)
   const model = new Uint8Array(await res.arrayBuffer())
   const actual = await sha256Hex(model)
   if (actual !== msg.modelSha256) throw new Error('empreinte du modèle inattendue (fichier altéré ?)')
-  const fileset = await FilesetResolver.forVisionTasks(msg.wasmBase)
-  if (typeof OffscreenCanvas === 'undefined') throw new Error('OffscreenCanvas indisponible (iOS 16 ou antérieur)')
-  detector = await FaceDetector.createFromOptions(fileset, {
-    // Canvas fourni explicitement : sans lui, MediaPipe ne détecte OffscreenCanvas que si l'identifiant
-    // du navigateur contient « Version/ » (Safari) et tombe sinon sur `document`, absent d'un worker.
-    // Constat réel : Chrome sur iPhone (CriOS) → « Can't find variable: document ».
-    canvas: new OffscreenCanvas(1, 1),
-    baseOptions: { modelAssetBuffer: model, delegate: 'CPU' },
-    runningMode: 'IMAGE',
-    // Seuil bas : pour l'anonymisation, un faux positif (zone floutée en trop) est sans gravité.
-    minDetectionConfidence: 0.3,
-    minSuppressionThreshold: 0.3,
-  })
+  ort.env.wasm.wasmPaths = msg.wasmBase.endsWith('/') ? msg.wasmBase : `${msg.wasmBase}/`
+  // Pas d'isolation d'origine sur GitHub Pages : un seul fil (on parallélise avec plusieurs workers).
+  ort.env.wasm.numThreads = 1
+  ort.env.wasm.proxy = false
+  session = await ort.InferenceSession.create(model, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' })
+  canvas = new OffscreenCanvas(YUNET_SIZE, YUNET_SIZE)
   scope.postMessage({ type: 'ready', ms: Math.round(performance.now() - t0) })
 }
 
-function detectIn(source: ImageBitmap | OffscreenCanvas, dx = 0, dy = 0): Box[] {
-  return detector!.detect(source).detections.map((d) => {
-    const b = d.boundingBox!
-    return { x: b.originX + dx, y: b.originY + dy, w: b.width, h: b.height, score: d.categories[0]?.score }
-  })
+async function run(frame: ImageBitmap, p: Placement): Promise<Box[]> {
+  const ctx = canvas!.getContext('2d', { willReadFrequently: true })!
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, YUNET_SIZE, YUNET_SIZE)
+  ctx.drawImage(frame, p.sx, p.sy, p.sw, p.sh, 0, 0, p.sw * p.scale, p.sh * p.scale)
+  const pixels = ctx.getImageData(0, 0, YUNET_SIZE, YUNET_SIZE).data
+  const input = new ort.Tensor('float32', toBgrPlanar(pixels), [1, 3, YUNET_SIZE, YUNET_SIZE])
+  const out = await session!.run({ [session!.inputNames[0]]: input })
+  const boxes = nms(decode(out as unknown as Record<string, { data: Float32Array }>, MIN_SCORE))
+  // Boîtes coupées par le bord d'un carré (hors image entière) : gardées, la NMS globale arbitre.
+  return boxes.map((b) => mapBack(b, p))
 }
 
-/** Grille décalée d'une demi-tuile : un visage coupé entre deux tuiles de la grille normale est entier ici. */
-function shiftedTiles(width: number, height: number) {
-  const half = Math.round(PASS_TILE * 0.375)
-  return tileGrid(width, height, PASS_TILE, 0.25).map((t) => ({
-    ...t,
-    x: Math.min(Math.max(0, t.x + half), Math.max(0, width - t.size)),
-    y: Math.min(Math.max(0, t.y + half), Math.max(0, height - t.size)),
-  }))
-}
-
-function detectTiles(frame: ImageBitmap, tiles: ReturnType<typeof tileGrid>, group: number): Box[] {
-  tileCanvas ??= new OffscreenCanvas(PASS_TILE, PASS_TILE)
-  const ctx = tileCanvas.getContext('2d')!
-  const found: Box[] = []
-  tiles.forEach((t, i) => {
-    if (i % GROUPS !== group) return
-    if (tileCanvas!.width !== t.size) tileCanvas!.width = tileCanvas!.height = t.size
-    ctx.drawImage(frame, t.x, t.y, t.size, t.size, 0, 0, t.size, t.size)
-    found.push(...detectIn(tileCanvas!, t.x, t.y))
-  })
-  return found
-}
-
-function detect(msg: Extract<FaceWorkerIn, { type: 'detect' }>) {
+async function detect(msg: Extract<FaceWorkerIn, { type: 'detect' }>) {
   const t0 = performance.now()
   const frame = msg.frame
   const mode = msg.mode ?? 'live'
   try {
-    const whole = detectIn(frame)
-    if (mode !== 'live') {
-      // Second passage : TOUTES les tuiles de chaque image. Avec un tiers des tuiles à tour de rôle,
-      // un petit visage n'était examiné que toutes les 0,3 s et pouvait passer inaperçu (constat E2E).
-      const tiles = mode === 'verify' ? shiftedTiles(frame.width, frame.height) : tileGrid(frame.width, frame.height, PASS_TILE, 0.25)
-      const found: Box[] = []
-      for (let g = 0; g < GROUPS; g++) found.push(...detectTiles(frame, tiles, g))
-      const boxes = mergeBoxes([...whole, ...found])
-      scope.postMessage({ type: 'faces', id: msg.id, boxes, ms: Math.round(performance.now() - t0), complete: true })
-      return
-    }
-    const tiles = tileGrid(frame.width, frame.height, TILE, 0.25)
-    const group = cycle % GROUPS
-    cycle++
-    groupBoxes[group] = detectTiles(frame, tiles, group)
-    const boxes = mergeBoxes([...whole, ...groupBoxes.flat()])
-    scope.postMessage({ type: 'faces', id: msg.id, boxes, ms: Math.round(performance.now() - t0), complete: cycle >= GROUPS })
+    const W = frame.width
+    const H = frame.height
+    const placements = [
+      wholePlacement(W, H),
+      ...(mode === 'analyze' ? squarePlacements(W, H) : mode === 'verify' ? squarePlacements(W, H, Math.round(Math.min(W, H) / 4)) : []),
+    ]
+    const found: Box[] = []
+    for (const p of placements) found.push(...(await run(frame, p)))
+    scope.postMessage({ type: 'faces', id: msg.id, boxes: nms(found, 0.3), ms: Math.round(performance.now() - t0), complete: true })
   } finally {
     frame.close()
   }
@@ -156,17 +124,14 @@ scope.onmessage = (event) => {
   if (msg.type === 'init') {
     init(msg).catch((err: unknown) => scope.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) }))
   } else if (msg.type === 'reset') {
-    cycle = 0
-    groupBoxes.fill([])
+    // Aucun état entre images : rien à oublier.
   } else if (msg.type === 'detect') {
-    if (!detector) {
+    if (!session) {
       msg.frame.close()
       return
     }
-    try {
-      detect(msg)
-    } catch (err) {
-      scope.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) })
-    }
+    queue = queue
+      .then(() => detect(msg))
+      .catch((err: unknown) => scope.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) }))
   }
 }

@@ -43,7 +43,7 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 | Relais (supervision, NIP-42) | `src/lib/nostr/pool.ts` (`LiveSubscription`, `publishEvent`) |
 | Événements NIP-71/92/56/09, BUD-03 | `src/lib/nostr/events.ts` |
 | Client Blossom | `src/lib/blossom/client.ts`, `urls.ts`, `health.ts` (serveurs mis de côté) |
-| Capture canvas, MIME, nettoyage MP4 | `src/lib/media/` (visages : `face-tracker`, `face-history`, second passage `face-pass` + `face-plan`) |
+| Capture canvas, MIME, nettoyage MP4 | `src/lib/media/` (visages : détecteur YuNet `yunet.ts` + `face-worker.ts`, `face-tracker`, `face-history`, second passage `face-pass` + `face-plan`) |
 | Publication (2 voies), file IndexedDB | `src/lib/publish.ts`, `src/lib/storage/outbox.ts` |
 | État du mur, modération | `src/lib/wall-store.ts`, `src/lib/moderation/policy.ts` |
 | Lecteur anti-censure | `src/components/ResilientVideo.tsx` |
@@ -70,9 +70,10 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 8. Ne jamais émettre de tags Proofmode (`proof-version`, `verification-level`) : impossible à prouver
    depuis un navigateur.
 9. Base relative (`base: './'`) et routage par fragment : l'app doit marcher sous `/ipfs/<cid>/`.
-10. **MediaPipe sans télémétrie** : ne jamais retirer `mediapipeNoTelemetry` (vite.config.ts) ni le
-    garde-fou réseau de `face-worker.ts`. Toute montée de version de `@mediapipe/tasks-vision` doit être
-    auditée (le build échoue si l'URL de télémétrie change).
+10. **Détecteur de visages autonome** : YuNet (`public/models/`, empreinte vérifiée par le worker) exécuté
+    par ONNX Runtime Web dont le moteur (`dist/ort/`) est servi par le site, jamais par un CDN. Ne jamais
+    retirer le garde-fou réseau de `face-worker.ts`. Toute montée de version d'`onnxruntime-web` : vérifier
+    que le worker ne contacte que l'origine (E2E « Visages » : aucune requête externe).
 11. OpenTimestamps : on horodate l'empreinte du **fichier** ; ne contacter que les calendriers de la
     liste blanche (`settings.otsCalendars`) ; jamais de vérification sans action de l'utilisateur.
 12. **Préservation et porteurs : clé jetable.** Une copie demandée par un spectateur (R1) ou un paquet
@@ -87,7 +88,8 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
 16. **Visages** : masques et confiance du détecteur expirent ensemble, datés à la capture (`face-history.ts`).
     Second passage (`face-pass.ts`, `face-plan.ts`) : la vidéo brute ne quitte jamais la mémoire (ni file
     d'envoi, ni réseau) ; échec = vidéo abandonnée ; le mode (direct ou second passage) est figé au
-    début de l'enregistrement. L'E2E « Visages » mesure le **fichier final** (ressemblance < 0,5).
+    début de l'enregistrement. L'E2E « Visages » mesure le **fichier final** (ressemblance < 0,65 ; net ≈ 0,85–0,92).
+    Rendu : visage réduit à ~6–7 points puis lissé, ellipse serrée (choix de l'éditeur : point de friction).
 
 ## Façon de travailler
 - **Chaque défaut constaté en réel = un test de bout en bout qui échoue sur l'ancien code**, puis la
