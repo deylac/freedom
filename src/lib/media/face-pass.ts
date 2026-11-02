@@ -47,7 +47,11 @@ const VERIFY_EVERY_S = 0.5
  * « ressembler » à un visage (scores jusqu'à 0,65 mesurés), mais il est alors sous un masque et
  * écarté par sa position ; un visage net raté, lui, peut ne scorer que 0,5 (mesuré en E2E).
  */
-const VERIFY_MIN_SCORE = 0.3
+const VERIFY_MIN_SCORE = 0.6
+/** Analyse : en dessous, trop de fausses alertes (test réel : portes et murs pris pour des visages). */
+const ANALYZE_MIN_SCORE = 0.5
+/** Pixelisation complète d'un passage seulement pour un visage net très probable. */
+const FALLBACK_MIN_SCORE = 0.75
 /** Autour d'un visage que le contrôle n'a pas pu corriger : image entière pixelisée (s). */
 const FALLBACK_WINDOW_S = 0.5
 
@@ -71,26 +75,31 @@ function makeCanvas(w: number, h: number): OffscreenCanvas | HTMLCanvasElement {
 
 type Ctx2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
 
-/** Ellipse pixelisée, ajustée au rectangle (le visage) : rien d'autre n'est touché. */
+/**
+ * Visage flouté (et non pixelisé en gros blocs) : la zone est réduite à ~7 points de large puis
+ * agrandie avec lissage. Même perte d'information qu'une pixelisation à 7 blocs (irréversible), mais
+ * l'image reste lisible autour. Ellipse ajustée au visage : rien d'autre n'est touché.
+ */
 export function pixelateEllipse(ctx: Ctx2D, scratch: Ctx2D, box: Box, W: number, H: number) {
   const x = Math.max(0, Math.floor(box.x))
   const y = Math.max(0, Math.floor(box.y))
   const w = Math.min(W, Math.ceil(box.x + box.w)) - x
   const h = Math.min(H, Math.ceil(box.y + box.h)) - y
   if (w < 2 || h < 2) return
-  const block = Math.max(4, Math.round(Math.max(box.w, box.h) / 8))
-  const tw = Math.max(1, Math.ceil(w / block))
-  const th = Math.max(1, Math.ceil(h / block))
+  const cells = 7 / Math.max(box.w, 1)
+  const tw = Math.max(2, Math.round(w * cells))
+  const th = Math.max(2, Math.round(h * cells))
   scratch.canvas.width = tw
   scratch.canvas.height = th
   scratch.imageSmoothingEnabled = true
+  scratch.imageSmoothingQuality = 'high'
   scratch.drawImage(ctx.canvas, x, y, w, h, 0, 0, tw, th)
   ctx.save()
   ctx.beginPath()
-  // Ellipse légèrement plus large que le rectangle inscrit : les coins du visage restent couverts.
-  ctx.ellipse(box.x + box.w / 2, box.y + box.h / 2, (box.w / 2) * 1.12, (box.h / 2) * 1.12, 0, 0, Math.PI * 2)
+  ctx.ellipse(box.x + box.w / 2, box.y + box.h / 2, box.w / 2, box.h / 2, 0, 0, Math.PI * 2)
   ctx.clip()
-  ctx.imageSmoothingEnabled = false
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(scratch.canvas, 0, 0, tw, th, x, y, w, h)
   ctx.restore()
 }
@@ -239,7 +248,7 @@ export async function blurFacesInVideo(
   }
   const progress = opts.onProgress ?? (() => {})
   const analysis = await scan(raw, ANALYZE_EVERY_S, 'analyze', detect, (f) => progress('analyse', f))
-  const plan = new MaskPlan(analysis)
+  const plan = new MaskPlan(analysis.map((f) => ({ t: f.t, boxes: f.boxes.filter((b) => (b.score ?? 1) >= ANALYZE_MIN_SCORE) })))
   lap('analyse')
 
   let result = await render(raw, opts.codec, opts.bitrate, plan, [], (f) => progress('floutage', f))
@@ -256,9 +265,9 @@ export async function blurFacesInVideo(
     result = await render(raw, opts.codec, opts.bitrate, plan, [], (f) => progress('correction', f * 0.5))
     checked = await scan(result.blob, VERIFY_EVERY_S, 'verify', detect, (f) => progress('correction', 0.5 + f * 0.5))
     missed = residuals(checked, plan)
-    if (missed.length > 0) {
+    if (missed.some((f) => f.boxes.some((b) => (b.score ?? 1) >= FALLBACK_MIN_SCORE))) {
       // Échec fermé : ce qui résiste à la correction est entièrement pixelisé.
-      fullTimes.push(...missed.map((f) => f.t))
+      fullTimes.push(...missed.filter((f) => f.boxes.some((b) => (b.score ?? 1) >= FALLBACK_MIN_SCORE)).map((f) => f.t))
       result = await render(raw, opts.codec, opts.bitrate, plan, fullTimes, (f) => progress('correction', f))
     }
     lap('correction')

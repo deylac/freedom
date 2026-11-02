@@ -201,14 +201,14 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full object-cover"
-        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' ? 'hidden' : 'visible' }}
+        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' || phase === 'processing' ? 'hidden' : 'visible' }}
         aria-label="Aperçu de la caméra"
       />
       {/* Calque de l'aperçu flouté : l'image enregistrée reste brute (en mémoire) jusqu'au second passage. */}
       <canvas
         ref={overlayRef}
         className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' ? 'hidden' : 'visible' }}
+        style={{ transform: facing === 'user' ? 'scaleX(-1)' : undefined, visibility: phase === 'review' || phase === 'processing' ? 'hidden' : 'visible' }}
         aria-hidden
         data-testid="blur-overlay"
       />
@@ -269,7 +269,7 @@ export function CaptureScreen({ tag, onClose }: { tag: string; onClose: () => vo
             </div>
           </div>
 
-          {filter !== 'none' && (
+          {filter !== 'none' && phase !== 'processing' && (
             <p
               className="absolute inset-x-4 top-24 rounded-xl bg-black/50 px-3 py-2 text-center text-xs text-white/90 backdrop-blur"
               role="status"

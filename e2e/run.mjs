@@ -846,8 +846,33 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
   await page.locator('[data-testid=face-status][data-trusted=true]').waitFor({ timeout: 60_000 })
   await page.waitForTimeout(500)
   const count = Number(await page.getByTestId('face-status').getAttribute('data-count'))
-  const after = { faces: await Promise.all(FACES.map((f) => flatness(page, f))), bg: await flatness(page, BACKGROUND) }
-  after.faces.forEach((f, i) => assert.ok(f > 0.8, `visage ${i} (${FACES[i].w} px) non flouté : platitude ${f.toFixed(2)} (avant ${base.faces[i].toFixed(2)})`))
+  // Aperçu : flou lisse (plus de blocs) → on compare les contours de l'aperçu à ceux de l'image brute.
+  const previewSim = await page.evaluate((regions) => {
+    const base = document.querySelector('canvas[aria-label="Aperçu de la caméra"]')
+    const overlay = document.querySelector('[data-testid=blur-overlay]')
+    const c = new OffscreenCanvas(base.width, base.height)
+    const cx = c.getContext('2d')
+    cx.drawImage(base, 0, 0)
+    const rawData = regions.map((r) => cx.getImageData(r.x, r.y, r.w, r.h).data)
+    cx.drawImage(overlay, 0, 0)
+    const grad = (d, r) => {
+      const out = []
+      for (let j = 0; j < r.h; j++) for (let i = 0; i < r.w - 1; i++) {
+        const k = (j * r.w + i) * 4
+        out.push(0.299 * (d[k + 4] - d[k]) + 0.587 * (d[k + 5] - d[k + 1]) + 0.114 * (d[k + 6] - d[k + 2]))
+      }
+      return out
+    }
+    return regions.map((r, i) => {
+      const a = grad(rawData[i], r)
+      const b = grad(cx.getImageData(r.x, r.y, r.w, r.h).data, r)
+      let ab = 0, aa = 0, bb = 0
+      for (let k = 0; k < a.length; k++) { ab += a[k] * b[k]; aa += a[k] * a[k]; bb += b[k] * b[k] }
+      return aa && bb ? ab / Math.sqrt(aa * bb) : 0
+    })
+  }, FACES)
+  previewSim.forEach((v, i) => assert.ok(v < 0.5, `aperçu : visage ${i} (${FACES[i].w} px) encore reconnaissable (ressemblance ${v.toFixed(2)})`))
+  const after = { faces: previewSim, bg: await flatness(page, BACKGROUND) }
   assert.ok(after.bg < 0.2, `le fond ne devrait plus être pixelisé (platitude ${after.bg.toFixed(2)})`)
 
   // Référence : contours des visages NETS dans l'image brute (canvas enregistré, sans le calque).
@@ -944,10 +969,13 @@ await step('Visages floutés (MediaPipe) : visages pixelisés, fond intact, éch
   console.log('    [ressemblance max par image]', final.map((f) => Math.max(...f.sim).toFixed(2)).join(' '))
   assert.ok(final.length >= 20, `trop peu d'images contrôlées (${final.length})`)
   assert.ok(worst < 0.5, `visage reconnaissable dans la vidéo finale à ${worstAt?.t} s (ressemblance ${worst.toFixed(2)} ; ${JSON.stringify(worstAt)})`)
-  assert.ok(Number(report['data-faces']) >= 4, `visages suivis : ${report['data-faces']} (4 attendus au moins)`)
+  // 3 visages fixes + 1 mobile vu à 2 endroits = 5 pistes ; au-delà, ce sont des fausses alertes
+  // (constat réel : « 17 visages » pour une seule personne, porte et mur pixelisés).
+  assert.ok(Number(report['data-faces']) >= 4 && Number(report['data-faces']) <= 6, `visages suivis : ${report['data-faces']} (4 à 6 attendus)`)
+  assert.equal(report['data-full'], '0', 'aucun passage ne devrait être entièrement pixelisé')
 
   assert.deepEqual(external, [], `requêtes externes : ${external.join(', ')}`)
-  return `vidéo finale : ${final.length} images contrôlées, ressemblance max ${worst.toFixed(2)} (< 0,5), ${report['data-faces']} visages suivis, ${report['data-corrected']} oubli(s) corrigé(s), traitement ${report['data-ms']} ms ${report['data-steps']} ; aperçu : ${count} visages, platitude des visages ${FACES.map((f, i) => `${f.w}px ${base.faces[i].toFixed(2)}→${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
+  return `vidéo finale : ${final.length} images contrôlées, ressemblance max ${worst.toFixed(2)} (< 0,5), ${report['data-faces']} visages suivis, ${report['data-corrected']} oubli(s) corrigé(s), traitement ${report['data-ms']} ms ${report['data-steps']} ; aperçu : ${count} visages, ressemblance ${FACES.map((f, i) => `${f.w}px ${after.faces[i].toFixed(2)}`).join(', ')} ; fond ${base.bg.toFixed(2)}→${after.bg.toFixed(2)} (chargement : ${bgWhileLoading.toFixed(2)})`
   } finally {
     await faceBrowser.close()
   }
