@@ -125,7 +125,7 @@ plafond par auteur, dédoublonnage, signalements vérifiés (preuve de travail),
 | R2 | Adresses de secours (liste intégrée + liste signée sur Nostr) + écran + diagnostic « réseau bloqué » | code | moyen | ✅ livré — reste à **publier** la liste (clé du projet) |
 | R3 | Paquets hors ligne signés + partage natif + « Publier un paquet reçu » | code | élevé | ✅ livré |
 | R4 | Découverte automatique de serveurs Blossom et de relais (10063, 10002, NIP-66) | code | moyen | 🟠 partiel : 16 relais sondés, serveurs 10063 des auteurs utilisés pour les copies ; NIP-65/66 à faire |
-| R5 | Déploiement multi-origines (Codeberg, IPFS épinglé, Arweave, .onion) | exploitation | variable | nécessite des comptes de l'éditeur |
+| R5 | Déploiement multi-origines (Cloudflare, Netlify, Codeberg, IPFS) + liste signée publiée automatiquement | code + exploitation | variable | ✅ automatisé (`mirrors.yml`, `docs/MIROIRS.md`) — reste à créer les comptes et la clé du projet |
 | R6 | Pair-à-pair WebRTC entre spectateurs | code | élevé | plus tard |
 
 Ce qui dépend de l'éditeur (comptes, argent, serveurs) : noms de domaine dans plusieurs pays, comptes

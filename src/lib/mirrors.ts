@@ -87,3 +87,22 @@ export function knownMirrors(current = `${window.location.origin}${window.locati
   for (const url of MIRRORS) add(url, 'intégrée')
   return [...out.values()]
 }
+
+/**
+ * Le miroir est-il joignable DEPUIS LE RÉSEAU de l'utilisateur ? (requête sans lecture de réponse :
+ * une réponse opaque suffit à prouver que ni le DNS ni la connexion ne sont bloqués). Seulement sur
+ * action de l'utilisateur ; ne contacte que les adresses du projet.
+ */
+export async function probeMirror(url: string, timeoutMs = 8000): Promise<boolean> {
+  if (url.includes('.onion')) return false
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    await fetch(new URL('manifest.webmanifest', url).href, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' })
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}

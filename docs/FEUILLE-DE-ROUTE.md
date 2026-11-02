@@ -15,6 +15,7 @@ Effort conseillé : 🟢 moyen suffit (tout est spécifié) · 🟠 élevé cons
 | 5 | Floutage des visages sur iPhone (MediaPipe) | P1 | ✅ livré (modèle *full range* + tuiles) |
 | 6 | « Charger plus » (pagination des murs anciens) | P2 | ✅ livré |
 | 7 | Horodatage OpenTimestamps | P2 | ✅ livré — sur l'empreinte du **fichier**, pas NIP-03 (voir ANGLES-MORTS §8) |
+| 11 | **Lancement** : 10 000 connectés (`CAPACITE.md`), partage vers les réseaux sociaux, filigrane, miroirs automatisés (`MIROIRS.md`) | P0 | ✅ code livré — comptes d’hébergement et clé du projet à créer par l’éditeur |
 | 8 | **Résilience maximale** (miroirs, réplication par les spectateurs, hors ligne, P2P) | P0 | ✅ R1–R3 livrés, R4 partiel — détails et suite : `docs/RESILIENCE.md` §3–5 |
 | 10 | **Floutage des visages** : abandonné en automatique (test réel insuffisant) ; disponible **après coup, à la demande, expérimental** | P3 | ⏸️ mis de côté — voir ANGLES-MORTS 12.9 |
 | 9 | **Audit développeur** (9 défauts : visages, doublons, effacement, suppression, service worker, file d'envoi, reprise, imeta, modérateurs) | P1 | ✅ corrigés avec tests — `docs/ANGLES-MORTS.md` §10 |

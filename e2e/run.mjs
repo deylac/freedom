@@ -487,6 +487,11 @@ await step('Adresses de secours : liste signée par la clé du projet, faux miro
   assert.equal(await page.locator('[data-mirror*="miroir-piege"]').count(), 0, 'miroir non signé par le projet affiché')
   await signed.getByRole('button', { name: 'QR' }).click()
   await signed.getByRole('img', { name: /QR code/ }).waitFor({ timeout: 3_000 })
+  // Test de joignabilité depuis le réseau de l'utilisateur : l'adresse actuelle répond, l'adresse
+  // fictive non (aucune résolution DNS possible).
+  await page.getByTestId('probe-mirrors').click()
+  await page.locator('[data-source="actuelle"] [data-reach="ok"]').waitFor({ timeout: 10_000 })
+  await signed.locator('[data-reach="ko"]').waitFor({ timeout: 12_000 })
   await page.context().close()
 
   // Réseau qui bloque tous les relais : le mur vide doit s'expliquer.

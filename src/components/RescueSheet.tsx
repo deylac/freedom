@@ -4,7 +4,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useReadRelays, useRelayStatus } from '../hooks/basics'
-import { knownMirrors, type Mirror } from '../lib/mirrors'
+import { knownMirrors, probeMirror, type Mirror } from '../lib/mirrors'
 import { serviceWorkerState } from '../lib/sw-status'
 import { QrSvg } from './QrModal'
 import { IconLink, IconShare } from './icons'
@@ -21,6 +21,13 @@ export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () 
   const { connected, total } = useRelayStatus(useReadRelays())
   const mirrors = useMemo(() => knownMirrors(), [])
   const [qr, setQr] = useState<string | null>(null)
+  const [reach, setReach] = useState<Record<string, 'test' | 'ok' | 'ko'>>({})
+  const testAll = () => {
+    for (const m of mirrors) {
+      setReach((r) => ({ ...r, [m.url]: 'test' }))
+      void probeMirror(m.url).then((ok) => setReach((r) => ({ ...r, [m.url]: ok ? 'ok' : 'ko' })))
+    }
+  }
   const sw = serviceWorkerState()
   const link = (m: Mirror) => (tag ? `${m.url}#${tag}` : m.url)
 
@@ -44,6 +51,10 @@ export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () 
           )}
         </p>
 
+        <button className="text-sm font-semibold text-accent underline" onClick={testAll} data-testid="probe-mirrors">
+          Tester depuis mon réseau
+        </button>
+
         <ul className="space-y-2">
           {mirrors.map((m) => (
             <li key={m.url} className="rounded-xl border border-line bg-night p-3" data-mirror={m.url} data-source={m.source}>
@@ -54,6 +65,12 @@ export function RescueSheet({ tag, onClose }: { tag: string | null; onClose: () 
                     {m.label ? `${m.label} · ` : ''}
                     {SOURCE_LABEL[m.source]}
                     {m.url.includes('.onion') ? ' · Tor Browser' : ''}
+                    {reach[m.url] && (
+                      <span className={reach[m.url] === 'ok' ? 'text-ok' : reach[m.url] === 'ko' ? 'text-rec' : ''} data-reach={reach[m.url]}>
+                        {' · '}
+                        {reach[m.url] === 'test' ? 'test…' : reach[m.url] === 'ok' ? 'joignable depuis votre réseau' : m.url.includes('.onion') ? 'à ouvrir dans Tor Browser' : 'bloqué ou injoignable'}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1">

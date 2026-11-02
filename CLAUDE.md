@@ -31,6 +31,7 @@ Avant tout push : `typecheck`, `test`, `e2e` verts.
     une capture de Réglages → « Diagnostic du dernier envoi ».
 - Déploiement : **chaque push sur `main` dont la CI réussit** publie GitHub Pages (`pages.yml` attend
   `ci.yml`, typecheck + tests + build + E2E : compter ~8 min). Une CI rouge = rien n'est publié.
+  `mirrors.yml` publie aussi les miroirs configurés et la liste signée (`docs/MIROIRS.md`).
   Suivre l'état via l'API publique : `curl -s https://api.github.com/repos/deylac/freedom/actions/workflows/pages.yml/runs?per_page=1`.
 - Playwright : utiliser le paquet du projet (`playwright@1.63.0`, même version que le Chromium
   préinstallé dans `/opt/pw-browsers`). Ne jamais lancer `playwright install` ici.

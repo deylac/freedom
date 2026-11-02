@@ -35,6 +35,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # Même liste de miroirs que les autres hébergeurs (voir mirrors.yml et docs/MIROIRS.md).
+          VITE_MIRRORS: ${{ vars.HASHWALL_MIRRORS }}
+          VITE_PROJECT_NPUB: ${{ vars.HASHWALL_PROJECT_NPUB }}
+          VITE_SITE_URL: ${{ vars.HASHWALL_SITE_URL }}
       - run: node --check dist/sw.js
       - uses: actions/upload-pages-artifact@v3
         with:
